@@ -57,7 +57,7 @@ class ClaudeRunner:
         self._timeout = config.get("jibsa", {}).get("claude_timeout", 120)
 
     def _build_system_prompt(
-        self, history: list[dict], integrations: list[str]
+        self, history: list[dict], integrations: list[str], notion_context: str = ""
     ) -> str:
         tz = self.config.get("jibsa", {}).get("timezone", "UTC")
         now = datetime.now()
@@ -82,6 +82,11 @@ class ClaudeRunner:
             "{tone}": self._persona["tone"].strip(),
             "{boundaries}": self._persona["boundaries"].strip(),
             "{integrations}": integration_lines,
+            "{notion_context}": (
+                f"## Notion Context\nThe following is live data from the user's Notion Second Brain. "
+                f"Use it to give specific, grounded answers.\n\n{notion_context}"
+                if notion_context else ""
+            ),
             "{date}": now.strftime("%A, %B %d, %Y"),
             "{time}": now.strftime("%H:%M"),
             "{timezone}": tz,
@@ -97,6 +102,7 @@ class ClaudeRunner:
         user_message: str,
         history: list[dict] | None = None,
         active_integrations: list[str] | None = None,
+        notion_context: str = "",
     ) -> dict | str:
         """
         Send user_message to Claude and return the response.
@@ -108,6 +114,7 @@ class ClaudeRunner:
         system_prompt = self._build_system_prompt(
             history=history or [],
             integrations=active_integrations or [],
+            notion_context=notion_context,
         )
 
         cmd = ["claude", "-p", "--system-prompt", system_prompt]

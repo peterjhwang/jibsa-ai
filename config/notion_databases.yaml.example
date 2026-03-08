@@ -1,0 +1,52 @@
+# Notion database IDs and property name mappings
+# Copy this file to notion_databases.yaml and fill in your values.
+# notion_databases.yaml is gitignored — safe to put real IDs there.
+
+notion:
+  # --- Database IDs (paste full URL or bare UUID) ---
+  tasks_db: ""
+  projects_db: ""
+  meeting_notes_db: ""
+  journal_db: ""
+  knowledge_base_db: ""
+  crm_db: ""
+  archive_db: ""
+
+  # --- Property name mappings ---
+  # Edit these to match the exact property names in YOUR Notion databases.
+  # Notion property names are case-sensitive.
+
+  properties:
+    tasks:
+      name: "Name"           # Title property
+      status: "Status"       # Select: "To Do" / "In Progress" / "Done"
+      priority: "Priority"   # Select: "High" / "Medium" / "Low"
+      due_date: "Due Date"   # Date
+      project: "Project"     # Relation → projects_db
+
+    projects:
+      name: "Name"           # Title property
+      status: "Status"       # Select
+      owner: "Owner"         # Rich Text
+      deadline: "Deadline"   # Date
+
+    meeting_notes:
+      name: "Name"           # Title property
+      date: "Date"           # Date
+      attendees: "Attendees" # Rich Text
+      project: "Project"     # Relation → projects_db
+
+    journal:
+      name: "Name"           # Title property
+      date: "Date"           # Date
+
+    knowledge_base:
+      name: "Name"           # Title property
+      tags: "Tags"           # Multi-select
+
+    crm:
+      name: "Name"           # Title property
+      company: "Company"     # Rich Text
+      role: "Role"           # Rich Text
+      last_contacted: "Last Contacted"  # Date
+      notes: "Notes"         # Rich Text

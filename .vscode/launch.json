@@ -1,0 +1,38 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Jibsa: Run Bot",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "src.app",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "LOG_LEVEL": "DEBUG"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "Jibsa: Run Tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["tests/", "-v"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "justMyCode": false
+    },
+    {
+      "name": "Jibsa: Run Current Test File",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-v"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "justMyCode": false
+    }
+  ]
+}

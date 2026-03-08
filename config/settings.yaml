@@ -50,7 +50,7 @@ approval:
 # Integrations — set enabled: true as each phase is deployed
 integrations:
   notion:
-    enabled: false
+    enabled: true
   jira:
     enabled: false
   google_calendar:

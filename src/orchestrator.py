@@ -10,6 +10,7 @@ from typing import Any
 
 from .approval import ApprovalManager, ApprovalState
 from .claude_runner import ClaudeRunner
+from .integrations.notion_second_brain import build_second_brain
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class Orchestrator:
         self.config = config
         self.runner = ClaudeRunner(config)
         self.approval = ApprovalManager(config)
+        self.notion = build_second_brain(config)
         self._history: dict[str, list[dict]] = {}  # thread_ts → message list
         self._max_history: int = config.get("jibsa", {}).get("max_history", 20)
 
@@ -92,10 +94,18 @@ class Orchestrator:
         history = self._get_history(thread_ts)
         active = _active_integrations(self.config)
 
+        notion_context = ""
+        if self.notion:
+            try:
+                notion_context = self.notion.get_context_for_request(text)
+            except Exception:
+                logger.warning("Notion context enrichment failed", exc_info=True)
+
         response = self.runner.run(
             user_message=text,
             history=history,
             active_integrations=active,
+            notion_context=notion_context,
         )
 
         # Save user message to history
@@ -112,23 +122,30 @@ class Orchestrator:
             self._add_to_history(thread_ts, "assistant", str(response))
 
     def _execute_plan(self, plan: dict, channel: str, thread_ts: str) -> None:
-        """
-        Execute an approved action plan.
-
-        Phase 1: No live integrations — log and confirm.
-        Phase 2+: Dispatch each step to the appropriate integration client.
-        """
         steps = plan.get("steps", [])
-        logger.info(
-            "Executing plan '%s' (%d steps)", plan.get("summary", ""), len(steps)
-        )
+        logger.info("Executing plan '%s' (%d steps)", plan.get("summary", ""), len(steps))
 
-        # Phase 1 stub — replace with real dispatch in Phase 2
-        self._post(
-            channel,
-            thread_ts,
-            "✅ Plan approved. Execution will be connected in Phase 2.",
-        )
+        results = []
+        for step in steps:
+            service = step.get("service", "")
+            if service == "notion" and self.notion:
+                result = self.notion.execute_step(step)
+            else:
+                result = {"ok": False, "error": f"'{service}' not connected yet"}
+            results.append((step, result))
+            logger.info("Step %s/%s → ok=%s", step.get("action"), service, result.get("ok"))
+
+        lines = [f"✅ *{plan.get('summary', 'Plan')} — complete*\n"]
+        for step, result in results:
+            desc = step.get("description") or step.get("action", "step")
+            if result.get("ok"):
+                url = result.get("url", "")
+                suffix = f" → <{url}|view>" if url else ""
+                lines.append(f"  ✅ {desc}{suffix}")
+            else:
+                lines.append(f"  ⚠️ {desc} — {result.get('error', 'unknown error')}")
+
+        self._post(channel, thread_ts, "\n".join(lines))
 
     # ------------------------------------------------------------------
     # Formatting

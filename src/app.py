@@ -41,28 +41,26 @@ def create_app(config: dict) -> tuple[App, Orchestrator]:
 
     target_channel = config.get("jibsa", {}).get("channel_name", "jibsa")
 
-    @slack_app.event("message")
-    def handle_message(event, ack):
-        ack()
-
-        # Skip bot messages and message edits/deletions
+    def _route(event):
         if event.get("bot_id") or event.get("subtype"):
             return
-
-        channel_info = event.get("channel", "")
         text = event.get("text", "").strip()
         if not text:
             return
-
-        # Resolve thread_ts: stay in existing thread or start one from this message
-        thread_ts = event.get("thread_ts") or event["ts"]
-
         orchestrator.handle_message(
-            channel=channel_info,
-            thread_ts=thread_ts,
+            channel=event.get("channel", ""),
+            thread_ts=event.get("thread_ts") or event["ts"],
             user=event.get("user", ""),
             text=text,
         )
+
+    @slack_app.event("message")
+    def handle_message(event):
+        _route(event)
+
+    @slack_app.event("app_mention")
+    def handle_mention(event):
+        _route(event)
 
     # Verify the bot is responding to the right channel
     # (Socket Mode delivers all events; filter handled by Slack app subscription)

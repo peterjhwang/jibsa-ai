@@ -76,17 +76,21 @@ class ClaudeRunner:
                 lines.append(f"{role}: {msg['content']}")
             history_text = "\n".join(lines)
 
-        return self._system_template.format(
-            name=self._persona["name"],
-            owner="the user",  # overridable in Phase 5 setup wizard
-            tone=self._persona["tone"].strip(),
-            boundaries=self._persona["boundaries"].strip(),
-            integrations=integration_lines,
-            date=now.strftime("%A, %B %d, %Y"),
-            time=now.strftime("%H:%M"),
-            timezone=tz,
-            history=history_text or "(no prior messages in this thread)",
-        )
+        replacements = {
+            "{name}": self._persona["name"],
+            "{owner}": "the user",
+            "{tone}": self._persona["tone"].strip(),
+            "{boundaries}": self._persona["boundaries"].strip(),
+            "{integrations}": integration_lines,
+            "{date}": now.strftime("%A, %B %d, %Y"),
+            "{time}": now.strftime("%H:%M"),
+            "{timezone}": tz,
+            "{history}": history_text or "(no prior messages in this thread)",
+        }
+        result = self._system_template
+        for key, value in replacements.items():
+            result = result.replace(key, value)
+        return result
 
     def run(
         self,
@@ -106,7 +110,7 @@ class ClaudeRunner:
             integrations=active_integrations or [],
         )
 
-        cmd = ["claude", "-p", "--system", system_prompt]
+        cmd = ["claude", "-p", "--system-prompt", system_prompt]
 
         logger.debug("Calling claude -p with %d chars of system prompt", len(system_prompt))
 

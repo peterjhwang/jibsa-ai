@@ -12,8 +12,8 @@ Built on [Claude](https://claude.ai) via the `claude -p` headless CLI.
 
 ```bash
 # 1. Clone
-git clone https://github.com/sevaka-ai/jibsa.git
-cd jibsa
+git clone https://github.com/peterjhwang/jibsa-ai.git
+cd jibsa-ai
 
 # 2. Configure
 cp .env.example .env
@@ -44,7 +44,7 @@ Secrets go in `.env` (never committed).
 | Phase | Scope | Status |
 |-------|-------|--------|
 | **1** | Core loop: Slack bot + Claude + propose-approve flow | ✅ Done |
-| **2** | Notion Second Brain (PARA: tasks, projects, meeting notes, CRM) | 🔜 |
+| **2** | Notion Second Brain (PARA: tasks, projects, meeting notes, CRM) | ✅ Done |
 | **3** | Jira + Google Calendar + scheduled jobs (morning briefing, EOD review) | 🔜 |
 | **4** | Gmail + weekly digest + team interactions | 🔜 |
 | **5** | Setup wizard, Slack Block Kit, audit logging, open-source polish | 🔜 |
@@ -77,6 +77,3 @@ Your Slack app needs:
 
 MIT — see [LICENSE](LICENSE).
 
----
-
-*Jibsa is part of the [Sevaka.ai](https://sevaka.ai) open-source ecosystem.*

@@ -1,52 +1,81 @@
-# Notion database IDs and property name mappings
-# Copy this file to notion_databases.yaml and fill in your values.
+# Notion databases — Jibsa Second Brain integration
+# Copy this file to notion_databases.yaml and fill in your IDs.
 # notion_databases.yaml is gitignored — safe to put real IDs there.
+#
+# No field mapping needed. Jibsa auto-discovers property names from the
+# database schema at runtime and passes raw JSON to Claude for reads.
+#
+# keywords: words in a user message that trigger a query to this database.
+# You can paste the full Notion URL or a bare UUID as the id.
 
 notion:
-  # --- Database IDs (paste full URL or bare UUID) ---
-  tasks_db: ""
-  projects_db: ""
-  meeting_notes_db: ""
-  journal_db: ""
-  knowledge_base_db: ""
-  crm_db: ""
-  archive_db: ""
+  databases:
 
-  # --- Property name mappings ---
-  # Edit these to match the exact property names in YOUR Notion databases.
-  # Notion property names are case-sensitive.
+    # --- Productivity ---
+    - name: Tasks
+      id: ""
+      keywords: [task, todo, action, to-do]
 
-  properties:
-    tasks:
-      name: "Name"           # Title property
-      status: "Status"       # Select: "To Do" / "In Progress" / "Done"
-      priority: "Priority"   # Select: "High" / "Medium" / "Low"
-      due_date: "Due Date"   # Date
-      project: "Project"     # Relation → projects_db
+    - name: Projects
+      id: ""
+      keywords: [project, build, launch, initiative]
 
-    projects:
-      name: "Name"           # Title property
-      status: "Status"       # Select
-      owner: "Owner"         # Rich Text
-      deadline: "Deadline"   # Date
+    - name: Goals
+      id: ""
+      keywords: [goal, aim, objective, target, quarterly]
 
-    meeting_notes:
-      name: "Name"           # Title property
-      date: "Date"           # Date
-      attendees: "Attendees" # Rich Text
-      project: "Project"     # Relation → projects_db
+    - name: Areas
+      id: ""
+      keywords: [area, responsibility, life area]
 
-    journal:
-      name: "Name"           # Title property
-      date: "Date"           # Date
+    - name: Notes
+      id: ""
+      keywords: [note, knowledge, idea, resource, info]
 
-    knowledge_base:
-      name: "Name"           # Title property
-      tags: "Tags"           # Multi-select
+    # --- Personal ---
+    - name: Journal Entries
+      id: ""
+      keywords: [journal entry, diary, entry, reflection]
 
-    crm:
-      name: "Name"           # Title property
-      company: "Company"     # Rich Text
-      role: "Role"           # Rich Text
-      last_contacted: "Last Contacted"  # Date
-      notes: "Notes"         # Rich Text
+    - name: Habit Tracker
+      id: ""
+      keywords: [habit, routine, streak, daily]
+
+    - name: Books Library
+      id: ""
+      keywords: [book, reading, read, author]
+
+    # --- People ---
+    - name: Contacts
+      id: ""
+      keywords: [contact, person, people, follow up]
+
+    - name: Networking & Events
+      id: ""
+      keywords: [networking, event, meetup, conference]
+
+    # --- Finance ---
+    - name: Expense Record
+      id: ""
+      keywords: [expense, spending, spent, cost, purchase]
+
+    - name: Income Record
+      id: ""
+      keywords: [income, salary, earnings, revenue]
+
+    - name: Accounts
+      id: ""
+      keywords: [account, bank, balance, savings]
+
+    - name: Bills & Subscriptions
+      id: ""
+      keywords: [bill, subscription, recurring, payment]
+
+    # --- Health & Fitness ---
+    - name: Workouts
+      id: ""
+      keywords: [workout, gym, training, exercise, fitness]
+
+    - name: Meals
+      id: ""
+      keywords: [meal, food, eat, diet, nutrition, calories]

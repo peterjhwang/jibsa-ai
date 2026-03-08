@@ -109,3 +109,11 @@ class NotionClient:
             return self._client.pages.retrieve(page_id=page_id)
         except APIResponseError as e:
             raise NotionAPIError("get_page", e) from e
+
+    def get_database_schema(self, database_id: str) -> dict:
+        """Return the properties dict (name → type info) for a database."""
+        try:
+            ds = self._client.data_sources.retrieve(data_source_id=database_id)
+            return ds.get("properties", {})
+        except APIResponseError as e:
+            raise NotionAPIError("get_database_schema", e) from e

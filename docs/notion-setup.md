@@ -3,147 +3,86 @@
 You need two things to connect Jibsa to Notion:
 
 1. A **Notion integration token** → `NOTION_TOKEN` in `.env`
-2. **Database IDs** for your 6 PARA databases → `config/notion_databases.yaml`
+2. **Database IDs** for your databases → `config/notion_databases.yaml`
+
+No field mapping required — Jibsa auto-discovers property names from each database's schema at runtime.
 
 ---
 
 ## 1. Create a Notion Integration
 
 > ⚠️ Make sure to create an **Internal** integration, not a Public one.
-> Internal integrations give you a simple `secret_` token — no OAuth needed.
+> Internal integrations give you a simple token — no OAuth needed.
 
 1. Go to [notion.so/my-integrations](https://www.notion.so/my-integrations)
 2. Click **+ New integration**
-3. On the creation screen, set **Integration type** to **Internal**
+3. Set **Integration type** to **Internal**
 4. Name it `Jibsa`, select your workspace
 5. Under **Capabilities**, check:
    - ✅ Read content
    - ✅ Update content
    - ✅ Insert content
 6. Click **Save**
-7. Go to the **Secrets** tab on the integration page
-8. Copy the **Internal Integration Secret** (starts with `secret_`) → this is your **`NOTION_TOKEN`**
+7. Go to the **Secrets** tab → copy the token → this is your **`NOTION_TOKEN`**
 
 Add it to `.env`:
 ```
-NOTION_TOKEN=secret_your-token-here
+NOTION_TOKEN=your-token-here
 ```
 
 > If you only see OAuth credentials (Client ID / Client Secret), you created a Public integration by mistake. Go back and create a new one with type **Internal**.
 
 ---
 
-## 2. Create the 6 PARA Databases
+## 2. Grant Access to Your Workspace
 
-Jibsa expects these 6 databases in your Notion workspace. Create any that don't exist yet.
+The easiest way is to grant access at the top level:
 
-### Tasks Database
-Properties:
-| Property | Type | Options |
-|----------|------|---------|
-| Name | Title | — |
-| Status | Select | `To Do`, `In Progress`, `Done` |
-| Priority | Select | `High`, `Medium`, `Low` |
-| Due Date | Date | — |
-| Project | Relation | → Projects database |
-
-### Projects Database
-Properties:
-| Property | Type | Options |
-|----------|------|---------|
-| Name | Title | — |
-| Status | Select | `Planning`, `In Progress`, `Done` |
-| Owner | Rich Text | — |
-| Deadline | Date | — |
-
-### Meeting Notes Database
-Properties:
-| Property | Type |
-|----------|------|
-| Name | Title |
-| Date | Date |
-| Attendees | Rich Text |
-| Project | Relation → Projects |
-
-### Journal Database
-Properties:
-| Property | Type |
-|----------|------|
-| Name | Title |
-| Date | Date |
-
-### Knowledge Base Database
-Properties:
-| Property | Type |
-|----------|------|
-| Name | Title |
-| Tags | Multi-select |
-
-### CRM / Contacts Database
-Properties:
-| Property | Type |
-|----------|------|
-| Name | Title |
-| Company | Rich Text |
-| Role | Rich Text |
-| Last Contacted | Date |
-| Notes | Rich Text |
-
----
-
-## 3. Connect Jibsa to Each Database
-
-For **each** of the 6 databases:
-
-1. Open the database in Notion
+1. Open your main Notion page (e.g. your workspace root or Second Brain page)
 2. Click **...** (top right) → **Connections**
 3. Find `Jibsa` and click **Confirm**
 
-Without this step, the integration token cannot access the database.
+This gives Jibsa access to all child pages and databases automatically — no need to connect each database individually.
 
 ---
 
-## 4. Get the Database IDs
+## 3. Fill in `config/notion_databases.yaml`
 
-For **each** database:
-
-1. Open the database as a full page (not inline)
-2. Copy the URL from your browser — it looks like:
-   ```
-   https://www.notion.so/your-workspace/abc123def456...?v=...
-   ```
-3. The database ID is the 32-character string **before** the `?v=` part:
-   ```
-   abc123de-f456-7890-abcd-ef1234567890
-   ```
-   (Notion sometimes shows it without hyphens — both formats work)
-
----
-
-## 5. Fill in `config/notion_databases.yaml`
-
-This file is in `.gitignore` — your DB IDs won't be committed. Copy the example first:
+This file is in `.gitignore` — your IDs won't be committed. Copy the example first:
 
 ```bash
 cp config/notion_databases.yaml.example config/notion_databases.yaml
 ```
 
-Then fill in your IDs:
+Then fill in your database IDs. You can paste the **full Notion URL** or a bare UUID — both work:
 
 ```yaml
 notion:
-  tasks_db: "abc123de-f456-7890-abcd-ef1234567890"
-  projects_db: "..."
-  meeting_notes_db: "..."
-  journal_db: "..."
-  knowledge_base_db: "..."
-  crm_db: "..."
-  archive_db: ""   # optional, leave empty if not using
+  databases:
+    - name: Tasks
+      id: "https://www.notion.so/your-workspace/Tasks-abc123..."
+      keywords: [task, todo, action]
+
+    - name: Projects
+      id: "abc123de-f456-7890-abcd-ef1234567890"
+      keywords: [project, build, launch]
 ```
+
+**To find a database ID:**
+1. Open the database as a full page in Notion
+2. Copy the URL — it looks like:
+   ```
+   https://www.notion.so/your-workspace/Tasks-abc123def456?v=...
+   ```
+3. Paste the full URL — Jibsa extracts the ID automatically.
+
+**keywords** control which database gets queried when a user message contains that word. Add, remove, or change them to suit your workflow.
+
+Only include databases you actually want Jibsa to read. Leave out anything private — just don't add it to the list.
 
 ---
 
-## 6. Enable Notion in Settings
+## 4. Enable Notion in Settings
 
 In `config/settings.yaml`, set:
 
@@ -155,7 +94,7 @@ integrations:
 
 ---
 
-## 7. Restart Jibsa
+## 5. Restart Jibsa
 
 ```bash
 # local
@@ -167,7 +106,7 @@ docker-compose restart
 
 You should see in the logs:
 ```
-INFO  — Notion Second Brain connected (6 DBs configured)
+INFO  — Notion Second Brain connected (N DBs configured)
 ```
 
 ---
@@ -176,22 +115,38 @@ INFO  — Notion Second Brain connected (6 DBs configured)
 
 In `#jibsa`, try:
 
-- `"what tasks do I have?"` — Jibsa should list tasks from your Tasks DB
-- `"show me active projects"` — lists projects with status and deadline
-- `"create a task: write the Q2 plan, due Friday, high priority"` — Jibsa proposes a plan → approve → Notion page created with a link
+- `"what tasks do I have?"` — queries your Tasks database
+- `"show me active projects"` — queries your Projects database
+- `"how are my habits going?"` — queries Habit Tracker (if configured)
+- `"what did I spend this month?"` — queries Expense Record (if configured)
+- `"create a task: write the Q2 plan, due Friday, high priority"` — proposes a plan → approve → Notion page created
+
+---
+
+## Adding a New Database
+
+Just add an entry to `notion_databases.yaml`:
+
+```yaml
+- name: Book Notes
+  id: "your-db-id-or-url"
+  keywords: [book, highlight, annotation]
+```
+
+No code changes needed. Jibsa will automatically query it when a matching keyword appears in a message, and auto-discover its property names for write operations.
 
 ---
 
 ## Troubleshooting
 
 **"Notion Second Brain connected (0 DBs configured)"**
-→ DB IDs in `notion_databases.yaml` are empty. Fill them in.
+→ All `id` fields in `notion_databases.yaml` are empty. Fill them in.
 
-**"Notion query_database failed: Could not find database"**
-→ The database ID is wrong, or you forgot to connect the integration to that database (Step 3).
+**"Could not find database"**
+→ The ID is wrong, or the integration doesn't have access. Re-check Step 2.
 
 **"NOTION_TOKEN is not set"**
-→ Add `NOTION_TOKEN=secret_...` to your `.env` file.
+→ Add the token to your `.env` file.
 
-**Property name errors**
-→ Jibsa expects exact property names as listed in Step 2. If your database uses different names (e.g. `"due date"` instead of `"Due Date"`), rename them in Notion to match.
+**Queries return 0 results**
+→ Check that the keywords match what you're typing. Try a broader keyword or add a new one to the relevant database entry.

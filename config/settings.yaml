@@ -1,0 +1,59 @@
+jibsa:
+  # Slack channel where Jibsa listens and responds
+  channel_name: "jibsa"
+
+  # Timezone for all scheduling and date formatting
+  timezone: "Asia/Seoul"
+
+  # Maximum conversation history kept per thread (message pairs)
+  max_history: 20
+
+  # Claude subprocess timeout in seconds
+  claude_timeout: 120
+
+  # Maximum concurrent Claude subprocess calls
+  claude_max_concurrent: 3
+
+scheduler:
+  morning_briefing:
+    enabled: false      # Enable in Phase 3
+    cron: "0 8 * * 1-5" # Mon-Fri 8 AM
+  eod_review:
+    enabled: false
+    cron: "0 17 * * 1-5" # Mon-Fri 5 PM
+  overdue_alerts:
+    enabled: false
+    cron: "0 10 * * 1-5" # Mon-Fri 10 AM
+  weekly_digest:
+    enabled: false
+    cron: "0 16 * * 5"   # Friday 4 PM
+
+approval:
+  # Keywords that trigger plan execution
+  approve_keywords:
+    - "✅"
+    - "yes"
+    - "approved"
+    - "go"
+    - "go ahead"
+    - "do it"
+    - "proceed"
+  # Keywords that cancel and request revision
+  reject_keywords:
+    - "❌"
+    - "no"
+    - "cancel"
+    - "stop"
+    - "revise"
+    - "change"
+
+# Integrations — set enabled: true as each phase is deployed
+integrations:
+  notion:
+    enabled: false
+  jira:
+    enabled: false
+  google_calendar:
+    enabled: false
+  gmail:
+    enabled: false

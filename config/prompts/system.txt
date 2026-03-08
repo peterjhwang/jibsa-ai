@@ -45,6 +45,16 @@ Timezone: {timezone}
 ```
 
 Valid services: notion, jira, calendar, gmail, slack
+
+Valid notion actions:
+- create_task — params: name, status, priority, due_date
+- update_task_status — params: page_id, status
+- create_project — params: name, status, deadline
+- create_note — params: name, tags (list), body
+- create_journal_entry — params: date, template ("daily"/"weekly"), body
+- log_expense — params: name, amount, date, note
+- log_workout — params: name, date, duration_min, notes
+
 The user will review the plan and approve (✅ yes / proceed) or reject (❌ no / cancel / revise).
 
 **For READ-ONLY REQUESTS** — answer directly from the context already injected above. Never say you need MCP, tools, or a server connection to answer.

@@ -1,48 +1,65 @@
 """
-ToolRegistry — maps tool names to integration capabilities.
+ToolRegistry — maps tool names to CrewAI tool instances.
 
 Used to:
-1. Filter available tools per intern based on their JD
-2. Build tool descriptions for system prompts
-3. Check execution permissions before running plan steps
+1. Build CrewAI tool lists per intern based on their JD
+2. Check execution permissions before running plan steps
+3. Provide tool descriptions for prompts and hire flow
 """
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .models.intern import InternJD
 
 logger = logging.getLogger(__name__)
 
-# Master catalog of available tools and their actions
+# Master catalog: tool name → metadata (description + valid write actions)
 TOOL_CATALOG: dict[str, dict] = {
     "notion": {
-        "description": "Create/update tasks, projects, notes, journal entries, expenses, workouts in Notion",
-        "actions": [
+        "description": "Query and manage tasks, projects, notes, journal entries, expenses, workouts in Notion",
+        "write_actions": [
             "create_task", "update_task_status", "create_project",
             "create_note", "create_journal_entry", "log_expense", "log_workout",
         ],
     },
-    # Future tools — add here as they become available
-    # "web_search": {
-    #     "description": "Search the web for information",
-    #     "actions": ["search"],
-    # },
-    # "slack": {
-    #     "description": "Post messages in Slack channels",
-    #     "actions": ["post_message"],
-    # },
+    "web_search": {
+        "description": "Search the web for current information using DuckDuckGo",
+        "write_actions": [],  # read-only tool
+    },
+    "code_exec": {
+        "description": "Execute Python code in a sandboxed environment for calculations and data processing",
+        "write_actions": [],  # read-only tool
+    },
 }
 
 
 class ToolRegistry:
     def __init__(self, catalog: dict[str, dict] | None = None):
         self._catalog = catalog or TOOL_CATALOG
+        self._crewai_tools: dict[str, Any] = {}  # tool_name → CrewAI BaseTool instance
+
+    def register_crewai_tool(self, name: str, tool_instance: Any) -> None:
+        """Register a CrewAI tool instance by name."""
+        self._crewai_tools[name] = tool_instance
 
     def get_all_tool_names(self) -> list[str]:
         return list(self._catalog.keys())
+
+    def get_crewai_tools_for_intern(self, intern: InternJD) -> list:
+        """Return list of CrewAI tool instances for an intern's allowed tools."""
+        allowed = {t.lower() for t in intern.tools_allowed}
+        return [
+            self._crewai_tools[name]
+            for name in allowed
+            if name in self._crewai_tools
+        ]
+
+    def get_crewai_tools_for_jibsa(self) -> list:
+        """Return all registered CrewAI tools (Jibsa has access to everything)."""
+        return list(self._crewai_tools.values())
 
     def get_tools_for_intern(self, intern: InternJD) -> dict[str, dict]:
         """Return filtered subset of tool catalog based on intern's tools_allowed."""
@@ -54,26 +71,31 @@ class ToolRegistry:
         }
 
     def get_tool_descriptions_for_prompt(self, intern: InternJD) -> str:
-        """Format tool descriptions for injection into system prompts."""
+        """Format tool descriptions for display."""
         tools = self.get_tools_for_intern(intern)
         if not tools:
             return "No tools assigned. You can only have conversations."
         lines = []
         for name, info in tools.items():
-            actions = ", ".join(info["actions"])
-            lines.append(f"- **{name}**: {info['description']}\n  Actions: {actions}")
+            lines.append(f"- **{name}**: {info['description']}")
+            if info.get("write_actions"):
+                actions = ", ".join(info["write_actions"])
+                lines.append(f"  Write actions (require approval): {actions}")
         return "\n".join(lines)
 
     def can_execute(self, intern: InternJD, service: str, action: str) -> bool:
-        """Check if an intern is allowed to execute a specific service action."""
+        """Check if an intern is allowed to execute a specific write action."""
         allowed = {t.lower() for t in intern.tools_allowed}
         if service.lower() not in allowed:
             return False
         tool_info = self._catalog.get(service.lower())
         if not tool_info:
             return False
-        return action in tool_info["actions"]
+        # Read-only tools have no write_actions — always allowed
+        if not tool_info["write_actions"]:
+            return True
+        return action in tool_info["write_actions"]
 
     def get_integration_names(self) -> list[str]:
-        """Return all integration names from the catalog (for active_integrations)."""
+        """Return all integration names from the catalog."""
         return list(self._catalog.keys())

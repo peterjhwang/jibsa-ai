@@ -2,10 +2,13 @@
 MessageRouter — parses incoming Slack messages to determine the target intern.
 
 Patterns:
-  "@jibsa alex do X"       → ("alex", "do X")
+  "@jibsa alex do X"        → ("alex", "do X")
   "@jibsa ask alex to do X" → ("alex", "do X")
-  "@jibsa hire ..."        → (None, "hire ...", True)
-  "@jibsa do X"            → (None, "do X", False)
+  "@jibsa hire ..."         → (None, "hire ...", True)
+  "@jibsa list interns"     → (None, "list interns", False)
+  "@jibsa show alex's jd"   → (None, "show alex's jd", False)
+  "@jibsa fire alex"        → (None, "fire alex", False)
+  "@jibsa do X"             → (None, "do X", False)
 """
 import logging
 import re
@@ -34,20 +37,21 @@ class MessageRouter:
         self._names = {n.lower() for n in names}
 
     def route(self, text: str) -> RouteResult:
-        """
-        Parse a message and return routing info.
-
-        The Slack mention prefix (<@BOT_ID>) is already stripped by Slack Bolt
-        for app_mention events, but may remain in channel messages. We strip
-        any leading <@...> or @jibsa prefix.
-        """
+        """Parse a message and return routing info."""
         cleaned = re.sub(r"^<@\w+>\s*", "", text).strip()
+        cleaned_lower = cleaned.lower()
 
         # Check for hire intent
-        cleaned_lower = cleaned.lower()
         for kw in HIRE_KEYWORDS:
             if cleaned_lower.startswith(kw):
                 return RouteResult(intern_name=None, message=cleaned, is_hire=True)
+
+        # Management commands are passed through to orchestrator (not routed to interns)
+        if cleaned_lower in ("list interns", "team", "interns", "show team"):
+            return RouteResult(intern_name=None, message=cleaned)
+
+        if cleaned_lower.startswith("show ") or cleaned_lower.startswith("fire "):
+            return RouteResult(intern_name=None, message=cleaned)
 
         # Check "ask {name} to ..." pattern
         ask_match = re.match(r"^ask\s+(\w+)\s+to\s+(.+)$", cleaned, re.IGNORECASE | re.DOTALL)

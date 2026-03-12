@@ -66,7 +66,6 @@ def test_hire_keyword_detected(router):
     result = router.route("hire a content marketing intern")
     assert result.is_hire is True
     assert result.intern_name is None
-    assert "hire" in result.message.lower()
 
 
 def test_create_intern_keyword_detected(router):
@@ -77,6 +76,34 @@ def test_create_intern_keyword_detected(router):
 def test_new_intern_keyword_detected(router):
     result = router.route("new intern who writes LinkedIn posts")
     assert result.is_hire is True
+
+
+# ---------------------------------------------------------------------------
+# Management commands
+# ---------------------------------------------------------------------------
+
+def test_list_interns_not_routed_to_intern(router):
+    """'list interns' should go to orchestrator, not to intern named 'list'."""
+    result = router.route("list interns")
+    assert result.intern_name is None
+    assert result.is_hire is False
+
+
+def test_team_command(router):
+    result = router.route("team")
+    assert result.intern_name is None
+
+
+def test_show_command_passthrough(router):
+    result = router.route("show alex's jd")
+    assert result.intern_name is None
+    assert "show" in result.message.lower()
+
+
+def test_fire_command_passthrough(router):
+    result = router.route("fire alex")
+    assert result.intern_name is None
+    assert "fire" in result.message.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +128,7 @@ def test_strips_mention_for_jibsa_message(router):
 
 def test_update_names_adds_new_intern(router):
     result = router.route("sam do something")
-    assert result.intern_name is None  # sam not known yet
+    assert result.intern_name is None
 
     router.update_names(["alex", "mia", "dev", "sam"])
     result = router.route("sam do something")

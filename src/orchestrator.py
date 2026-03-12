@@ -2,28 +2,37 @@
 Orchestrator — the central router.
 
 Receives messages from Slack, manages conversation history per thread,
-routes to the correct intern (or Jibsa itself), calls LLMRunner,
+routes to the correct intern (or Jibsa itself), runs CrewAI crews,
 handles the propose-approve flow, and dispatches approved plans to
 integration clients.
 
-v0.5: Multi-intern support with routing, hire flow, and per-intern tool access.
+v0.6: Full CrewAI integration — each intern is a CrewAI Agent with
+native tool use, memory, and multi-provider LLM support.
 """
 import logging
 from pathlib import Path
 from typing import Any
 
 from .approval import ApprovalManager, ApprovalState
+from .crew_runner import CrewRunner
 from .hire_flow import HireFlowManager
 from .intern_registry import InternRegistry
-from .llm_runner import LLMRunner
 from .integrations.notion_second_brain import build_second_brain
 from .models.intern import InternJD
 from .router import MessageRouter, RouteResult
 from .tool_registry import ToolRegistry
+from .tools.notion_read_tool import NotionReadTool
+from .tools.web_search_tool import WebSearchTool
+from .tools.code_exec_tool import CodeExecTool
 
 logger = logging.getLogger(__name__)
 
 _CONFIG_DIR = Path(__file__).parent.parent / "config"
+
+# Commands handled directly by the orchestrator (not routed to interns/LLM)
+MANAGEMENT_COMMANDS = {
+    "list interns", "team", "interns", "show team",
+}
 
 
 def _active_integrations(config: dict) -> list[str]:
@@ -35,41 +44,46 @@ def _active_integrations(config: dict) -> list[str]:
     ]
 
 
-def _load_text(path: Path) -> str:
-    with open(path) as f:
-        return f.read()
-
-
 class Orchestrator:
     def __init__(self, slack_client: Any, config: dict):
         self.slack = slack_client
         self.config = config
-        self.runner = LLMRunner(config)
-        self.approval = ApprovalManager(config)
         self.notion = build_second_brain(config)
+        self.approval = ApprovalManager(config)
+
+        # CrewAI runner
+        self.runner = CrewRunner(config)
+
+        # Tool registry with CrewAI tool instances
         self.tool_registry = ToolRegistry()
+        self._register_crewai_tools()
+
+        # Intern management
         self.intern_registry = InternRegistry(self.notion, config)
         self.router = MessageRouter(self.intern_registry.get_intern_names())
 
-        # Load intern prompt template
-        intern_prompt_path = _CONFIG_DIR / "prompts" / "intern.txt"
-        self._intern_prompt_template = (
-            _load_text(intern_prompt_path) if intern_prompt_path.exists() else None
-        )
+        # Hire flow
+        self.hire_flow = HireFlowManager(self.runner, self.intern_registry, self.tool_registry)
 
-        # Hire flow uses its own system prompt
-        hire_prompt_path = _CONFIG_DIR / "prompts" / "hire.txt"
-        hire_runner = LLMRunner(
-            config,
-            system_prompt_template=_load_text(hire_prompt_path) if hire_prompt_path.exists() else None,
-        )
-        self.hire_flow = HireFlowManager(hire_runner, self.intern_registry, self.tool_registry)
-
-        self._history: dict[str, list[dict]] = {}  # thread_ts → message list
+        self._history: dict[str, list[dict]] = {}
         self._max_history: int = config.get("jibsa", {}).get("max_history", 20)
 
         # Track which intern is active per thread (for approval context)
-        self._thread_intern: dict[str, str | None] = {}  # thread_ts → intern_name or None
+        self._thread_intern: dict[str, str | None] = {}
+
+    def _register_crewai_tools(self) -> None:
+        """Create and register CrewAI tool instances."""
+        # Notion read tool (available if Notion is connected)
+        if self.notion:
+            self.tool_registry.register_crewai_tool(
+                "notion", NotionReadTool.create(self.notion)
+            )
+
+        # Web search tool (always available)
+        self.tool_registry.register_crewai_tool("web_search", WebSearchTool())
+
+        # Code execution tool (always available)
+        self.tool_registry.register_crewai_tool("code_exec", CodeExecTool())
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -87,7 +101,6 @@ class Orchestrator:
         if self.hire_flow.has_session(thread_ts):
             response = self.hire_flow.handle(thread_ts, user, text)
             self._post(channel, thread_ts, response)
-            # Refresh router names after potential hire
             self.router.update_names(self.intern_registry.get_intern_names())
             return
 
@@ -99,6 +112,25 @@ class Orchestrator:
 
         # Priority 3: Route the message
         route = self.router.route(text)
+
+        # Management commands
+        if route.message.lower().strip() in MANAGEMENT_COMMANDS:
+            self._handle_list_interns(channel, thread_ts)
+            return
+
+        # Show intern JD: "show alex's jd" or "show alex"
+        if route.message.lower().startswith("show ") and not route.intern_name:
+            intern_name = route.message[5:].strip().rstrip("'s jd").rstrip("'s").strip()
+            intern = self.intern_registry.get_intern(intern_name)
+            if intern:
+                self._post(channel, thread_ts, f"📋 *{intern.name}'s Job Description:*\n\n{intern.format_jd()}")
+                return
+
+        # Fire intern: "fire alex"
+        if route.message.lower().startswith("fire ") and not route.intern_name:
+            intern_name = route.message[5:].strip()
+            self._handle_fire_intern(channel, thread_ts, intern_name)
+            return
 
         if route.is_hire:
             self._start_hire_flow(channel, thread_ts, user, route.message)
@@ -121,6 +153,34 @@ class Orchestrator:
         self._handle_new_request(channel, thread_ts, user, route.message)
 
     # ------------------------------------------------------------------
+    # Management commands
+    # ------------------------------------------------------------------
+
+    def _handle_list_interns(self, channel: str, thread_ts: str) -> None:
+        """List all active interns."""
+        interns = self.intern_registry.list_interns(force_refresh=True)
+        if not interns:
+            self._post(channel, thread_ts,
+                       "No interns yet. Say `hire a <role> intern` to create one.")
+            return
+
+        lines = ["*Your AI Interns:*\n"]
+        for i in interns:
+            tools = ", ".join(i.tools_allowed) or "none"
+            lines.append(f"  *{i.name}* — {i.role} (tools: {tools})")
+        lines.append(f"\n_{len(interns)} active intern{'s' if len(interns) != 1 else ''}_")
+        self._post(channel, thread_ts, "\n".join(lines))
+
+    def _handle_fire_intern(self, channel: str, thread_ts: str, name: str) -> None:
+        """Deactivate an intern."""
+        result = self.intern_registry.deactivate_intern(name)
+        if result.get("ok"):
+            self.router.update_names(self.intern_registry.get_intern_names())
+            self._post(channel, thread_ts, f"✅ Intern '{name}' has been deactivated.")
+        else:
+            self._post(channel, thread_ts, f"⚠️ {result.get('error', 'Could not fire intern')}")
+
+    # ------------------------------------------------------------------
     # Hire flow
     # ------------------------------------------------------------------
 
@@ -131,7 +191,7 @@ class Orchestrator:
         self._post(channel, thread_ts, response)
 
     # ------------------------------------------------------------------
-    # Intern request handling
+    # Intern request handling (CrewAI)
     # ------------------------------------------------------------------
 
     def _handle_intern_request(
@@ -142,10 +202,11 @@ class Orchestrator:
         text: str,
         intern: InternJD,
     ) -> None:
-        """Handle a request routed to a specific intern."""
+        """Handle a request routed to a specific intern via CrewAI."""
         history = self._get_history(thread_ts)
         active = _active_integrations(self.config)
 
+        # Get Notion context for enrichment
         notion_context = ""
         if self.notion:
             try:
@@ -153,40 +214,35 @@ class Orchestrator:
             except Exception:
                 logger.warning("Notion context enrichment failed", exc_info=True)
 
-        # Build intern-specific system prompt replacements
-        tools_desc = self.tool_registry.get_tool_descriptions_for_prompt(intern)
+        # Build intern backstory from JD
         responsibilities = "\n".join(f"- {r}" for r in intern.responsibilities)
+        tools_desc = self.tool_registry.get_tool_descriptions_for_prompt(intern)
+        backstory = (
+            f"You are {intern.name}, a {intern.role}.\n\n"
+            f"Responsibilities:\n{responsibilities}\n\n"
+            f"Communication style: {intern.tone}\n\n"
+            f"Autonomy rules: {intern.autonomy_rules}\n\n"
+            f"Tools available:\n{tools_desc}\n\n"
+            f"IMPORTANT: For write operations (creating/updating tasks, projects, notes, etc.), "
+            f"respond with ONLY a JSON action plan. For questions and read-only requests, answer directly."
+        )
 
-        # Build valid actions list for the intern's allowed tools
-        valid_actions_lines = []
-        intern_tools = self.tool_registry.get_tools_for_intern(intern)
-        for tool_name, tool_info in intern_tools.items():
-            valid_actions_lines.append(f"Valid {tool_name} actions:")
-            for action in tool_info["actions"]:
-                valid_actions_lines.append(f"- {action}")
-        valid_actions = "\n".join(valid_actions_lines)
+        # Get CrewAI tools for this intern
+        crewai_tools = self.tool_registry.get_crewai_tools_for_intern(intern)
 
-        extra = {
-            "{intern_name}": intern.name,
-            "{intern_role}": intern.role,
-            "{responsibilities}": responsibilities,
-            "{intern_tone}": intern.tone,
-            "{autonomy_rules}": intern.autonomy_rules,
-            "{tools}": tools_desc,
-            "{valid_actions}": valid_actions,
-        }
+        # Memory context
+        memory_context = intern.get_memory_context()
 
-        # Use intern-specific prompt template if available
-        runner = self.runner
-        if self._intern_prompt_template:
-            runner = LLMRunner(self.config, system_prompt_template=self._intern_prompt_template)
-
-        response = runner.run(
+        response = self.runner.run_for_intern(
             user_message=text,
-            history=history,
-            active_integrations=active,
+            intern_name=intern.name,
+            intern_role=intern.role,
+            intern_backstory=backstory,
+            tools=crewai_tools,
             notion_context=notion_context,
-            extra_replacements=extra,
+            history=history,
+            memory_context=memory_context,
+            active_integrations=active,
         )
 
         self._add_to_history(thread_ts, "user", text)
@@ -212,11 +268,16 @@ class Orchestrator:
             self.approval.set_pending(thread_ts, response, channel)
             self._add_to_history(thread_ts, "assistant", plan_text)
         else:
-            self._post(channel, thread_ts, f"{prefix}{response}")
-            self._add_to_history(thread_ts, "assistant", str(response))
+            response_str = str(response)
+            self._post(channel, thread_ts, f"{prefix}{response_str}")
+            self._add_to_history(thread_ts, "assistant", response_str)
+
+            # Update intern memory with a summary of the interaction
+            if len(response_str) > 20:
+                intern.add_memory(f"User asked: {text[:100]}... → Responded about {intern.role} duties")
 
     # ------------------------------------------------------------------
-    # Jibsa orchestrator handlers (original behavior)
+    # Jibsa orchestrator handlers
     # ------------------------------------------------------------------
 
     def _handle_approval_response(
@@ -252,6 +313,7 @@ class Orchestrator:
         user: str,
         text: str,
     ) -> None:
+        """Handle a message directed to Jibsa (orchestrator) via CrewAI."""
         history = self._get_history(thread_ts)
         active = _active_integrations(self.config)
 
@@ -262,11 +324,14 @@ class Orchestrator:
             except Exception:
                 logger.warning("Notion context enrichment failed", exc_info=True)
 
-        response = self.runner.run(
+        crewai_tools = self.tool_registry.get_crewai_tools_for_jibsa()
+
+        response = self.runner.run_for_jibsa(
             user_message=text,
+            tools=crewai_tools,
+            notion_context=notion_context,
             history=history,
             active_integrations=active,
-            notion_context=notion_context,
         )
 
         self._add_to_history(thread_ts, "user", text)
@@ -291,14 +356,12 @@ class Orchestrator:
         steps = plan.get("steps", [])
         logger.info("Executing plan '%s' (%d steps)", plan.get("summary", ""), len(steps))
 
-        # If plan came from an intern, check tool permissions
         intern = self.intern_registry.get_intern(intern_name) if intern_name else None
 
         results = []
         for step in steps:
             service = step.get("service", "")
 
-            # Permission check for intern-initiated plans
             if intern and not self.tool_registry.can_execute(intern, service, step.get("action", "")):
                 result = {"ok": False, "error": f"'{intern.name}' lacks permission for {service}/{step.get('action')}"}
             elif service == "notion" and self.notion:
@@ -322,7 +385,7 @@ class Orchestrator:
         if intern:
             prefix = f"*[{intern.name} — {intern.role}]*\n"
 
-        self._post(channel, thread_ts, f"{prefix}{''.join(lines) if prefix else chr(10).join(lines)}")
+        self._post(channel, thread_ts, f"{prefix}{chr(10).join(lines)}")
 
     # ------------------------------------------------------------------
     # Formatting

@@ -1,108 +1,127 @@
-# Jibsa AI – v1 Project Specification
-Last updated: March 2026
-Repo: https://github.com/peterjhwang/jibsa-ai
+# Jibsa AI · 집사
 
-## Tagline
-Create unlimited AI Interns in Slack.  
-Give them job descriptions, tools, and tasks — they work autonomously but always propose before acting (configurable).
+**Create Unlimited AI Interns in Slack**
 
-## Core Problem Solved
-SaaS teams need fast, low-cost scaling.  
-Instead of hiring juniors, any team member can spawn tailored AI agents (marketing intern, dev helper, ops assistant, etc.) in seconds — all inside Slack.
+Jibsa lets any team member instantly “hire” custom AI interns — content writers, developers, ops assistants, researchers — right inside your Slack workspace.
 
-## What is an "Intern"?
-- AI agent (powered by Claude via CLI for now)
-- Defined by: Job Description (persona, responsibilities, tone, approval rules)
-- Equipped with: Pre-defined tools (Notion, future: Jira, Calendar, code exec, search…)
-- Works in: Threads or DMs
-- Behavior: Proposes plan/output → waits for human approval (unless JD explicitly allows autonomy)
-- Interaction: Mention @jibsa + task → routes to correct intern persona
+Each intern gets:
+- A **Job Description** (persona + responsibilities + approval rules)
+- Assigned **tools** (Notion today, more coming)
+- Autonomous execution with **human-in-the-loop safety** (propose → approve)
 
-## Target Users (v1)
-- Anyone in the Slack workspace (no admin gate)
-- Internal company use (open-source for self-hosting by others later)
+Open-source Python app. Built for SaaS teams who want to scale with AI teammates.
 
-## v1 Architecture Decision (Compromise for Speed)
-Goal: Prove multi-intern concept quickly without managing dozens of Slack apps.
+---
 
-Chosen path → Hybrid (leans toward your B preference but starts simpler):
-- Single Slack app/bot → @jibsa
-- Interns = internal personas managed by one orchestrator
-- Each intern has its own:
-  - Name (e.g. "Alex – Content Intern")
-  - Job Description (stored in DB/file)
-  - Tool subset
-  - Approval rules
-- In Slack: Users say "@jibsa hire ..." or "@jibsa ask Alex to ..."
-- Replies prefixed: **[Alex – Content Intern]** → mimics separate identity
-- Future v2: Spin up real per-intern Slack bots (App installation API + dynamic tokens)
+## Why Jibsa?
 
-This gives 80% of the UX value with 20% complexity.
+Stop hiring juniors for repetitive work.  
+Any Slack user can create a specialized AI intern in seconds and start delegating tasks.
 
-## Key Features – v1 Scope
+**Core Principles**
+- Safety: Every external action requires explicit approval
+- Conversational: Natural language hiring and tasking
+- Extensible: Easy to add tools and new interns
+- Self-hostable & MIT-licensed
 
-1. Hire / Create Intern (conversational)
-   - User: "@jibsa hire a content marketing intern who writes LinkedIn posts and tracks campaign performance"
-   - Jibsa: Asks clarifying questions if needed → generates/refines clear Job Description
-   - Saves JD (YAML/JSON in Notion or local file)
-   - Assigns default tools + approval rules
-   - Confirms: "Intern 'Alex' created. Ready to assign tasks."
+---
 
-2. Job Description Structure (required sections – enforced)
-   - Name / Nickname
-   - Role / Persona
-   - Key Responsibilities
-   - Tone & Communication Style
-   - Tools Allowed (from pre-defined list)
-   - Autonomy & Confirmation Rules
-     Examples:
-     - "Always propose before: sending email, updating Notion production data, posting anywhere"
-     - "Research & drafts → fully autonomous; final publish → requires approval"
-     - "Ask only if output > $X cost or touches customer data"
+## Current Status – v0.5 Complete ✅
 
-3. Tools (Simple start – pre-built only)
-   - Current: Notion (create/update tasks/projects/notes/expenses/journals…)
-   - Planned short-term: Web search, basic code interpreter, Slack post/message
-   - Assignment: Listed in JD → Jibsa only exposes those tools to that intern
+**What’s now live**
+- Conversational hiring: `@jibsa hire a content marketing intern who...`
+- Multi-intern management & registry
+- Smart message routing (`@jibsa ask Alex to...`)
+- Job description storage + loading
+- Inherited propose-approve flow
+- Full Notion Second Brain (schema-free PARA system)
 
-4. Task Assignment & Work
-   - "@jibsa ask Alex to write 3 LinkedIn posts about our new feature"
-   - OR "@jibsa Alex, research competitors in CRM space"
-   - Jibsa routes to persona → runs CrewAI-like flow:
-     - Agent plans (proposes steps)
-     - Human approves/revises
-     - Executes approved steps (tools + Claude)
-     - Delivers result in thread
+**How it works**
+1. Mention `@jibsa` to hire or assign tasks
+2. Jibsa refines the job description conversationally
+3. Intern is created with its own persona and tools
+4. Tasks run in threads with **[Intern Name]** prefixes
 
-5. Tech Stack Evolution
-   - Keep: Slack Bolt (Socket Mode), Claude CLI runner, Notion schema-free
-   - Add: **CrewAI** (core orchestration – roles, tasks, sequential/hierarchical process)
-   - Storage: Notion (intern JDs, thread states) + local JSON fallback
-   - State: Per-thread + per-intern memory (CrewAI handles short-term; Notion for long-term)
+---
 
-## Non-Goals for v1
-- Real per-intern Slack bots (too much OAuth/app management)
-- User-created custom tools (Python functions or dynamic tool gen)
-- Multi-workspace
-- Advanced billing/token tracking
-- Full voice/image multimodal
+## Quick Start
 
-## Roadmap Sketch
-v0.5 (next 2–4 weeks)  → Multi-persona in single bot + CrewAI integration + hire flow
-v1.0                      → Stable, documented, 4–5 pre-built tools, good README
-v1.5                      → Custom @mentions via Slack user groups or display hacks
-v2.0                      → Dynamic Slack app creation per intern (your original B vision)
+```bash
+git clone https://github.com/peterjhwang/jibsa-ai.git
+cd jibsa-ai
 
-## Contribution / Open-Source Notes
-- License: MIT
-- Self-host friendly (Docker-compose ready)
-- Clear docs: How to add tools, change LLM backend, extend JDs
+uv venv && source .venv/bin/activate
+uv pip install -r requirements.txt
 
-## Next Immediate Steps
-1. Refactor current single-Jibsa → multi-persona routing
-2. Integrate CrewAI (start with simple Crew per task)
-3. Build conversational hire flow (Claude helps refine JD)
-4. Enforce JD structure (sections + approval rules)
-5. Update README with this spec + architecture diagram
+cp .env.example .env          # Add Slack + Notion tokens
+python -m src.app
+```
 
-Feel free to tweak any section — especially JD template, tool list priorities, or if you want to push harder toward real per-bot interns sooner.
+Or with Docker:
+```bash
+cp .env.example .env
+docker-compose up -d
+```
+
+Talk to Jibsa in your designated channel.
+
+---
+
+## Features
+
+- AI-assisted hiring flow
+- Multiple concurrent interns
+- Notion tool integration (create/update tasks, projects, notes, journals, expenses, etc.)
+- Threaded task conversations
+- Propose-approve gate on all writes
+
+---
+
+## Roadmap & Next Steps
+
+### v0.6 – Immediate (1–2 weeks)
+1. Integrate **CrewAI** for structured task orchestration per intern
+2. Enforce structured Job Description format (Persona, Tools, Approval Rules)
+3. Add intern memory & context persistence
+4. Expand tools: web search + basic code interpreter
+5. Improve hiring UX (better clarification + JD refinement)
+
+### v1.0 – Target April 2026
+- Stable multi-intern platform with 4–5 tools
+- `/interns list` and status commands
+- Better logging & error handling
+- Polished documentation + contribution guide
+
+### Future (v1.5+)
+- Real per-intern Slack bots (custom @mentions)
+- User-created tools (“make a tool that pulls Stripe data”)
+- Advanced autonomy levels
+- Cost tracking & multi-workspace support
+
+---
+
+## Project Structure (key new files)
+
+```
+src/
+├── app.py
+├── orchestrator.py
+├── router.py              # New: routes to interns
+├── intern_registry.py     # New: stores JDs
+├── hire_flow.py           # New: conversational hiring
+├── claude_runner.py
+└── integrations/
+    └── notion_second_brain.py
+```
+
+---
+
+## Contributing
+
+We love pull requests!  
+Especially welcome:
+- New tool integrations
+- CrewAI workflow improvements
+- Hiring flow enhancements
+
+Open issues or ping me on X (@PeterHwangDS).

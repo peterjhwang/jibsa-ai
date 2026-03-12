@@ -22,7 +22,7 @@ def mock_slack():
 
 @pytest.fixture
 def orchestrator(mock_slack):
-    with patch("src.orchestrator.LLMRunner") as MockRunner, \
+    with patch("src.orchestrator.CrewRunner") as MockRunner, \
          patch("src.orchestrator.build_second_brain", return_value=None):
         mock_runner = MagicMock()
         MockRunner.return_value = mock_runner
@@ -32,7 +32,7 @@ def orchestrator(mock_slack):
 
 
 def test_conversational_response_posts_text(orchestrator, mock_slack):
-    orchestrator.runner.run.return_value = "Good morning! How can I help?"
+    orchestrator.runner.run_for_jibsa.return_value = "Good morning! How can I help?"
     orchestrator.handle_message("C123", "ts-1", "U001", "hello")
     mock_slack.chat_postMessage.assert_called_once()
     args = mock_slack.chat_postMessage.call_args
@@ -46,7 +46,7 @@ def test_action_plan_response_posts_plan_and_sets_pending(orchestrator, mock_sla
         "steps": [{"service": "jira", "action": "create_issue", "params": {}, "description": "Create ticket"}],
         "needs_approval": True,
     }
-    orchestrator.runner.run.return_value = plan
+    orchestrator.runner.run_for_jibsa.return_value = plan
     orchestrator.handle_message("C123", "ts-2", "U001", "create a jira ticket for the bug")
 
     mock_slack.chat_postMessage.assert_called_once()
@@ -70,7 +70,6 @@ def test_approval_executes_plan(orchestrator, mock_slack):
     orchestrator.approval.set_pending("ts-3", plan, "C123")
     orchestrator.handle_message("C123", "ts-3", "U001", "yes")
 
-    # Should have posted execution confirmation
     mock_slack.chat_postMessage.assert_called_once()
     from src.approval import ApprovalState
     assert orchestrator.approval.get("ts-3").state == ApprovalState.IDLE
@@ -88,7 +87,7 @@ def test_rejection_clears_pending(orchestrator, mock_slack):
 
 
 # ---------------------------------------------------------------------------
-# Routing tests (v0.5)
+# Routing tests (v0.6)
 # ---------------------------------------------------------------------------
 
 def test_hire_message_starts_hire_flow(orchestrator, mock_slack):
@@ -98,9 +97,30 @@ def test_hire_message_starts_hire_flow(orchestrator, mock_slack):
         mock_start.assert_called_once()
 
 
-def test_unknown_intern_name_posts_help(orchestrator, mock_slack):
-    # "bob" is not a known intern name, but the first word matches router pattern
-    # Since bob is not in known_names, it routes to Jibsa
-    orchestrator.runner.run.return_value = "I can help with that."
+def test_unknown_intern_name_routes_to_jibsa(orchestrator, mock_slack):
+    orchestrator.runner.run_for_jibsa.return_value = "I can help with that."
     orchestrator.handle_message("C123", "ts-6", "U001", "bob do something")
     mock_slack.chat_postMessage.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Management commands (v0.6)
+# ---------------------------------------------------------------------------
+
+def test_list_interns_command(orchestrator, mock_slack):
+    orchestrator.handle_message("C123", "ts-7", "U001", "list interns")
+    mock_slack.chat_postMessage.assert_called_once()
+    text = mock_slack.chat_postMessage.call_args.kwargs["text"]
+    assert "intern" in text.lower()
+
+
+def test_team_command(orchestrator, mock_slack):
+    orchestrator.handle_message("C123", "ts-8", "U001", "team")
+    mock_slack.chat_postMessage.assert_called_once()
+
+
+def test_fire_unknown_intern(orchestrator, mock_slack):
+    orchestrator.handle_message("C123", "ts-9", "U001", "fire bob")
+    mock_slack.chat_postMessage.assert_called_once()
+    text = mock_slack.chat_postMessage.call_args.kwargs["text"]
+    assert "⚠️" in text

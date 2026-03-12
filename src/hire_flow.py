@@ -2,18 +2,18 @@
 HireFlowManager — conversational JD creation for new interns.
 
 Manages multi-turn conversations where the user creates a new intern
-through natural dialogue. Claude helps refine the Job Description.
+through natural dialogue. Uses CrewAI for the conversation.
 """
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
+from .models.intern import InternJD
 
-_CONFIG_DIR = Path(__file__).parent.parent / "config"
+logger = logging.getLogger(__name__)
 
 
 class HireFlowState(Enum):
@@ -45,7 +45,6 @@ def _extract_intern_jd(text: str) -> dict | None:
             pass
 
     # Try ```json ... ``` block
-    import re
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
         try:
@@ -58,30 +57,43 @@ def _extract_intern_jd(text: str) -> dict | None:
     return None
 
 
+def _validate_jd_data(jd_data: dict) -> list[str]:
+    """Validate JD data before creating intern. Returns list of issues."""
+    errors = []
+    if not jd_data.get("name", "").strip():
+        errors.append("Name is missing")
+    if not jd_data.get("role", "").strip():
+        errors.append("Role is missing")
+    if not jd_data.get("responsibilities"):
+        errors.append("At least one responsibility is required")
+    # Validate using InternJD model
+    try:
+        intern = InternJD(
+            name=jd_data.get("name", ""),
+            role=jd_data.get("role", ""),
+            responsibilities=jd_data.get("responsibilities", []),
+            tone=jd_data.get("tone", ""),
+            tools_allowed=jd_data.get("tools_allowed", []),
+            autonomy_rules=jd_data.get("autonomy_rules", ""),
+        )
+        errors.extend(intern.validate())
+    except Exception as e:
+        errors.append(str(e))
+    return errors
+
+
 class HireFlowManager:
-    def __init__(self, llm_runner: Any, intern_registry: Any, tool_registry: Any):
+    def __init__(self, crew_runner: Any, intern_registry: Any, tool_registry: Any):
         """
         Args:
-            llm_runner: LLMRunner instance
+            crew_runner: CrewRunner instance
             intern_registry: InternRegistry instance
             tool_registry: ToolRegistry instance
         """
-        self._runner = llm_runner
+        self._runner = crew_runner
         self._registry = intern_registry
         self._tool_registry = tool_registry
-        self._sessions: dict[str, HireSession] = {}  # thread_ts → session
-
-        # Load hire prompt template
-        try:
-            with open(_CONFIG_DIR / "prompts" / "hire.txt") as f:
-                self._prompt_template = f.read()
-        except FileNotFoundError:
-            logger.warning("hire.txt not found — using fallback prompt")
-            self._prompt_template = (
-                "You are helping create a new AI intern. "
-                "Gather: name, role, responsibilities, tone, tools_allowed, autonomy_rules. "
-                "When complete, output JSON with type: intern_jd.\n\n{history}"
-            )
+        self._sessions: dict[str, HireSession] = {}
 
     def has_session(self, thread_ts: str) -> bool:
         return thread_ts in self._sessions
@@ -102,7 +114,6 @@ class HireFlowManager:
     def handle(self, thread_ts: str, user: str, text: str) -> str:
         """
         Process a message in an active hire flow.
-
         Returns the response text to post in Slack.
         """
         session = self._sessions.get(thread_ts)
@@ -116,35 +127,27 @@ class HireFlowManager:
         # Add user message to conversation
         session.conversation.append({"role": "user", "content": text})
 
-        # Build hire prompt with conversation history
+        # Run via CrewAI
         available_tools = ", ".join(self._tool_registry.get_all_tool_names())
-        history_text = "\n".join(
-            f"{'User' if m['role'] == 'user' else 'Jibsa'}: {m['content']}"
-            for m in session.conversation
-        )
-
-        from datetime import datetime
-        now = datetime.now()
-
-        response = self._runner.run(
+        response_text = self._runner.run_for_hire(
             user_message=text,
-            extra_replacements={
-                "{available_tools}": available_tools,
-                "{history}": history_text,
-                "{date}": now.strftime("%A, %B %d, %Y"),
-                "{time}": now.strftime("%H:%M"),
-            },
+            available_tools=available_tools,
+            history=session.conversation,
         )
-
-        if isinstance(response, dict):
-            # LLM returned a structured response (unlikely in hire flow)
-            response_text = json.dumps(response, indent=2)
-        else:
-            response_text = str(response)
 
         # Check if the response contains a complete JD
         jd_data = _extract_intern_jd(response_text)
         if jd_data:
+            # Validate the JD
+            validation_errors = _validate_jd_data(jd_data)
+            if validation_errors:
+                error_text = "\n".join(f"  - {e}" for e in validation_errors)
+                session.conversation.append({"role": "assistant", "content": response_text})
+                return (
+                    f"Almost there, but the JD needs a few fixes:\n{error_text}\n\n"
+                    f"Can you help me fill in the missing details?"
+                )
+
             session.draft_jd = jd_data
             session.state = HireFlowState.CONFIRMING
             session.conversation.append({"role": "assistant", "content": response_text})
@@ -176,7 +179,6 @@ class HireFlowManager:
         if not jd_data:
             return "Something went wrong — no JD draft found."
 
-        from .models.intern import InternJD
         intern = InternJD(
             name=jd_data["name"],
             role=jd_data["role"],
@@ -186,6 +188,12 @@ class HireFlowManager:
             autonomy_rules=jd_data.get("autonomy_rules", "Always propose before acting"),
             created_by=session.user,
         )
+
+        # Final validation
+        errors = intern.validate()
+        if errors:
+            error_text = "\n".join(f"  - {e}" for e in errors)
+            return f"⚠️ JD validation failed:\n{error_text}\n\nPlease fix and try again."
 
         result = self._registry.create_intern(intern)
 

@@ -157,3 +157,29 @@ def test_get_all_tool_names(registry):
     assert "notion" in names
     assert "web_search" in names
     assert "code_exec" in names
+    assert "slack" in names
+    assert "calendar" in names
+
+
+# ---------------------------------------------------------------------------
+# Slack and Calendar tools in catalog
+# ---------------------------------------------------------------------------
+
+def test_slack_tool_has_write_actions(registry):
+    assert "post_message" in TOOL_CATALOG["slack"]["write_actions"]
+
+
+def test_calendar_tool_is_read_only(registry):
+    assert TOOL_CATALOG["calendar"]["write_actions"] == []
+
+
+def test_can_execute_slack_post(registry):
+    intern = InternJD(
+        name="Bot", role="Slack Bot", responsibilities=["Post"],
+        tone="", tools_allowed=["slack"], autonomy_rules="",
+    )
+    assert registry.can_execute(intern, "slack", "post_message") is True
+
+
+def test_cannot_execute_slack_without_permission(registry, notion_intern):
+    assert registry.can_execute(notion_intern, "slack", "post_message") is False

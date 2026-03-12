@@ -24,6 +24,8 @@ from .tool_registry import ToolRegistry
 from .tools.notion_read_tool import NotionReadTool
 from .tools.web_search_tool import WebSearchTool
 from .tools.code_exec_tool import CodeExecTool
+from .tools.slack_tool import SlackTool
+from .tools.calendar_tool import CalendarTool
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,12 @@ class Orchestrator:
 
         # Code execution tool (always available)
         self.tool_registry.register_crewai_tool("code_exec", CodeExecTool())
+
+        # Slack tool (write tool — proposes action plans)
+        self.tool_registry.register_crewai_tool("slack", SlackTool())
+
+        # Calendar tool (read-only stub for Phase 3)
+        self.tool_registry.register_crewai_tool("calendar", CalendarTool())
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -264,7 +272,14 @@ class Orchestrator:
                     return
 
             plan_text = self._format_plan(response)
-            self._post(channel, thread_ts, f"{prefix}{plan_text}")
+            full_text = f"{prefix}{plan_text}"
+            blocks = self._format_plan_blocks(response, full_text)
+            # Prepend intern prefix block
+            blocks.insert(0, {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": prefix.strip()},
+            })
+            self._post_blocks(channel, thread_ts, blocks, full_text)
             self.approval.set_pending(thread_ts, response, channel)
             self._add_to_history(thread_ts, "assistant", plan_text)
         else:
@@ -339,7 +354,8 @@ class Orchestrator:
 
         if isinstance(response, dict) and response.get("type") == "action_plan":
             plan_text = self._format_plan(response)
-            self._post(channel, thread_ts, plan_text)
+            blocks = self._format_plan_blocks(response, plan_text)
+            self._post_blocks(channel, thread_ts, blocks, plan_text)
             self.approval.set_pending(thread_ts, response, channel)
             self._add_to_history(thread_ts, "assistant", plan_text)
         else:
@@ -366,6 +382,8 @@ class Orchestrator:
                 result = {"ok": False, "error": f"'{intern.name}' lacks permission for {service}/{step.get('action')}"}
             elif service == "notion" and self.notion:
                 result = self.notion.execute_step(step)
+            elif service == "slack":
+                result = self._execute_slack_step(step)
             else:
                 result = {"ok": False, "error": f"'{service}' not connected yet"}
             results.append((step, result))
@@ -388,6 +406,28 @@ class Orchestrator:
         self._post(channel, thread_ts, f"{prefix}{chr(10).join(lines)}")
 
     # ------------------------------------------------------------------
+    # Slack execution
+    # ------------------------------------------------------------------
+
+    def _execute_slack_step(self, step: dict) -> dict:
+        """Execute a Slack write action (e.g. post_message)."""
+        action = step.get("action", "")
+        params = step.get("params", {})
+
+        if action == "post_message":
+            channel = params.get("channel", "")
+            message = params.get("message", "")
+            if not channel or not message:
+                return {"ok": False, "error": "Missing channel or message"}
+            try:
+                self.slack.chat_postMessage(channel=channel, text=message)
+                return {"ok": True}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+        return {"ok": False, "error": f"Unknown slack action: {action}"}
+
+    # ------------------------------------------------------------------
     # Formatting
     # ------------------------------------------------------------------
 
@@ -398,6 +438,48 @@ class Orchestrator:
             lines.append(f"  {i}. {desc}")
         lines.append("\nApprove? ✅ / ❌")
         return "\n".join(lines)
+
+    def _format_plan_blocks(self, plan: dict, text_fallback: str) -> list[dict]:
+        """Build Slack Block Kit blocks for an action plan with approve/reject buttons."""
+        steps_text = ""
+        for i, step in enumerate(plan.get("steps", []), 1):
+            desc = step.get("description") or f"{step.get('action')} on {step.get('service')}"
+            steps_text += f"{i}. {desc}\n"
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"📋 *Plan: {plan.get('summary', 'Proposed Action')}*",
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": steps_text.strip(),
+                },
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "✅ Approve"},
+                        "style": "primary",
+                        "action_id": "approve_plan",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "❌ Reject"},
+                        "style": "danger",
+                        "action_id": "reject_plan",
+                    },
+                ],
+            },
+        ]
+        return blocks
 
     # ------------------------------------------------------------------
     # History management
@@ -426,3 +508,40 @@ class Orchestrator:
             )
         except Exception as e:
             logger.error("Failed to post to Slack: %s", e)
+
+    def _post_blocks(self, channel: str, thread_ts: str, blocks: list[dict], text: str) -> None:
+        """Post a Block Kit message with a text fallback."""
+        try:
+            self.slack.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                blocks=blocks,
+                text=text,
+            )
+        except Exception as e:
+            logger.error("Failed to post blocks to Slack: %s", e)
+            # Fallback to plain text
+            self._post(channel, thread_ts, text)
+
+    # ------------------------------------------------------------------
+    # Block Kit button handler (called from app.py)
+    # ------------------------------------------------------------------
+
+    def handle_button_action(self, action_id: str, channel: str, thread_ts: str, user: str, respond) -> None:
+        """Handle Block Kit button clicks for approve/reject."""
+        ctx = self.approval.get(thread_ts)
+        if ctx.state != ApprovalState.PENDING:
+            respond("No pending plan for this thread.")
+            return
+
+        if action_id == "approve_plan":
+            logger.info("Thread %s — plan approved via button by %s", thread_ts, user)
+            respond("✅ Approved! Executing...")
+            intern_name = self._thread_intern.get(thread_ts)
+            self._execute_plan(ctx.pending_plan, channel, thread_ts, intern_name)
+            self.approval.clear(thread_ts)
+
+        elif action_id == "reject_plan":
+            logger.info("Thread %s — plan rejected via button by %s", thread_ts, user)
+            respond("❌ Rejected. What would you like to change?")
+            self.approval.clear(thread_ts)

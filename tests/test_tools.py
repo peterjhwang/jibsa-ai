@@ -1,10 +1,12 @@
-"""Tests for CrewAI custom tools — Notion read, web search, code exec."""
+"""Tests for CrewAI custom tools — Notion read, web search, code exec, slack, calendar."""
 from unittest.mock import MagicMock, patch
 import pytest
 
 from src.tools.notion_read_tool import NotionReadTool
 from src.tools.web_search_tool import WebSearchTool
 from src.tools.code_exec_tool import CodeExecTool
+from src.tools.slack_tool import SlackTool
+from src.tools.calendar_tool import CalendarTool
 
 
 # ---------------------------------------------------------------------------
@@ -107,3 +109,53 @@ class TestCodeExecTool:
         tool = CodeExecTool()
         result = tool._run("x = 42")
         assert result == "(no output)"
+
+
+# ---------------------------------------------------------------------------
+# SlackTool
+# ---------------------------------------------------------------------------
+
+class TestSlackTool:
+    def test_returns_action_plan_instructions(self):
+        tool = SlackTool()
+        result = tool._run(channel="#general", message="Hello team!")
+        assert "action_plan" in result
+        assert "#general" in result
+        assert "Hello team!" in result
+
+    def test_includes_post_message_action(self):
+        tool = SlackTool()
+        result = tool._run(channel="C0123ABC", message="Update")
+        assert "post_message" in result
+        assert "slack" in result
+
+    def test_needs_approval_flag(self):
+        tool = SlackTool()
+        result = tool._run(channel="#dev", message="Deploy done")
+        assert "needs_approval" in result
+
+
+# ---------------------------------------------------------------------------
+# CalendarTool
+# ---------------------------------------------------------------------------
+
+class TestCalendarTool:
+    def test_read_query_returns_roadmap(self):
+        tool = CalendarTool()
+        result = tool._run(query="my meetings today")
+        assert "Phase 3" in result or "coming" in result.lower()
+
+    def test_write_query_returns_not_available(self):
+        tool = CalendarTool()
+        result = tool._run(query="schedule a call Thursday 2pm")
+        assert "Phase 3" in result or "coming" in result.lower()
+
+    def test_write_suggests_notion(self):
+        tool = CalendarTool()
+        result = tool._run(query="book a meeting with John")
+        assert "Notion" in result
+
+    def test_read_mentions_upcoming_features(self):
+        tool = CalendarTool()
+        result = tool._run(query="what's on my calendar")
+        assert "event" in result.lower() or "meeting" in result.lower() or "schedule" in result.lower()

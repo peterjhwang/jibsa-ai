@@ -62,6 +62,23 @@ def create_app(config: dict) -> tuple[App, Orchestrator]:
     def handle_mention(event):
         _route(event)
 
+    # Block Kit button handlers for approve/reject
+    @slack_app.action("approve_plan")
+    def handle_approve(ack, body, respond):
+        ack()
+        channel = body["channel"]["id"]
+        thread_ts = body["message"].get("thread_ts") or body["message"]["ts"]
+        user = body["user"]["id"]
+        orchestrator.handle_button_action("approve_plan", channel, thread_ts, user, respond)
+
+    @slack_app.action("reject_plan")
+    def handle_reject(ack, body, respond):
+        ack()
+        channel = body["channel"]["id"]
+        thread_ts = body["message"].get("thread_ts") or body["message"]["ts"]
+        user = body["user"]["id"]
+        orchestrator.handle_button_action("reject_plan", channel, thread_ts, user, respond)
+
     # Verify the bot is responding to the right channel
     # (Socket Mode delivers all events; filter handled by Slack app subscription)
     logger.info("Jibsa will listen in #%s", target_channel)

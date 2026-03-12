@@ -33,6 +33,14 @@ TOOL_CATALOG: dict[str, dict] = {
         "description": "Execute Python code in a sandboxed environment for calculations and data processing",
         "write_actions": [],  # read-only tool
     },
+    "slack": {
+        "description": "Post messages to Slack channels (requires approval)",
+        "write_actions": ["post_message"],
+    },
+    "calendar": {
+        "description": "Check schedule, list events, or propose calendar entries (Google Calendar — preview)",
+        "write_actions": [],  # read-only stub for now
+    },
 }
 
 

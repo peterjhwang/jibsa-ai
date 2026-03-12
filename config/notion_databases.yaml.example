@@ -71,6 +71,11 @@ notion:
       id: ""
       keywords: [bill, subscription, recurring, payment]
 
+    # --- Interns (v0.5 multi-intern support) ---
+    - name: Interns
+      id: ""
+      keywords: [intern, hire, team, agent]
+
     # --- Health & Fitness ---
     - name: Workouts
       id: ""

@@ -6,6 +6,7 @@ from src.orchestrator import Orchestrator
 
 CONFIG = {
     "jibsa": {"max_history": 20, "claude_timeout": 120, "timezone": "UTC"},
+    "llm": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
     "approval": {
         "approve_keywords": ["✅", "yes", "approved", "go", "go ahead", "do it", "proceed"],
         "reject_keywords": ["❌", "no", "cancel", "stop", "revise", "change"],
@@ -21,7 +22,8 @@ def mock_slack():
 
 @pytest.fixture
 def orchestrator(mock_slack):
-    with patch("src.orchestrator.ClaudeRunner") as MockRunner:
+    with patch("src.orchestrator.LLMRunner") as MockRunner, \
+         patch("src.orchestrator.build_second_brain", return_value=None):
         mock_runner = MagicMock()
         MockRunner.return_value = mock_runner
         orch = Orchestrator(mock_slack, CONFIG)
@@ -83,3 +85,22 @@ def test_rejection_clears_pending(orchestrator, mock_slack):
     assert orchestrator.approval.get("ts-4").state == ApprovalState.IDLE
     text = mock_slack.chat_postMessage.call_args.kwargs["text"]
     assert "change" in text.lower() or "revise" in text.lower() or "what" in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Routing tests (v0.5)
+# ---------------------------------------------------------------------------
+
+def test_hire_message_starts_hire_flow(orchestrator, mock_slack):
+    with patch.object(orchestrator.hire_flow, "start_session") as mock_start, \
+         patch.object(orchestrator.hire_flow, "handle", return_value="What should this intern do?"):
+        orchestrator.handle_message("C123", "ts-5", "U001", "hire a marketing intern")
+        mock_start.assert_called_once()
+
+
+def test_unknown_intern_name_posts_help(orchestrator, mock_slack):
+    # "bob" is not a known intern name, but the first word matches router pattern
+    # Since bob is not in known_names, it routes to Jibsa
+    orchestrator.runner.run.return_value = "I can help with that."
+    orchestrator.handle_message("C123", "ts-6", "U001", "bob do something")
+    mock_slack.chat_postMessage.assert_called_once()

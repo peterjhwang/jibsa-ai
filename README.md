@@ -5,43 +5,60 @@
 <h1 align="center">집사 · Jibsa</h1>
 
 <p align="center">
-  <strong>Your AI Steward</strong> — an open-source AI secretary that lives in your Slack workspace.
+  <strong>Your AI Intern Platform</strong> — create custom AI interns with job descriptions, tools, and approval rules, all inside Slack.
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+"></a>
-  <a href="https://anthropic.com"><img src="https://img.shields.io/badge/powered%20by-Claude%20CLI-orange" alt="Powered by Claude"></a>
+  <a href="https://www.crewai.com"><img src="https://img.shields.io/badge/powered%20by-CrewAI-purple" alt="Powered by CrewAI"></a>
   <a href="https://github.com/astral-sh/uv"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" alt="uv"></a>
 </p>
 
 ---
 
-Jibsa (집사, Korean for "steward") acts as your personal AI secretary — managing tasks, organizing your Notion Second Brain, and handling day-to-day workflows, all from a single `#jibsa` Slack channel.
+Jibsa (집사, Korean for "steward") is an open-source multi-AI-intern platform that lives in your Slack workspace. Create custom AI interns — each with their own job description, personality, tools, and approval rules — and delegate tasks via `@jibsa`.
 
-Built on [Claude](https://claude.ai) via the `claude -p` headless CLI. All write operations go through a **propose-approve** gate — Jibsa never acts without your explicit approval.
+Built on [CrewAI](https://www.crewai.com) with multi-provider LLM support (Claude, GPT-4, Gemini). All write operations go through a **propose-approve** gate with interactive Block Kit buttons — interns never act without your explicit approval.
 
-## Workflow
+## How It Works
 
 ```
-You:  "Create a task to review Q1 budget by Friday"
+You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
                         │
                 ┌───────▼────────┐
-                │  🤔 Jibsa      │  analyses your request
+                │  🔀 Router     │  routes to Alex (content intern)
                 └───────┬────────┘
                         │
                 ┌───────▼────────┐
-                │  📋 Propose    │  drafts a plan and posts it in the thread
-                └───────┬────────┘
-                        │  ← you reply ✅ to approve or ❌ to revise
+                │  🤖 CrewAI     │  Alex reasons with assigned tools
+                └───────┬────────┘  (web search, Notion, etc.)
+                        │
                 ┌───────▼────────┐
-                │  ⚡ Execute    │  creates the task in Notion
+                │  📋 Propose    │  posts plan with ✅/❌ buttons
+                └───────┬────────┘
+                        │  ← you click ✅ Approve
+                ┌───────▼────────┐
+                │  ⚡ Execute    │  creates tasks in Notion, posts to Slack
                 └───────┬────────┘
                         │
-                ✅ Jibsa confirms completion
+                ✅ [Alex — Content Intern] confirms completion
 ```
 
-### Approval keywords
+### Commands (all via `@jibsa` mention)
+
+| Command | What it does |
+|---------|-------------|
+| `@jibsa hire a marketing intern` | Start conversational hiring flow |
+| `@jibsa alex write 3 blog posts` | Delegate a task to intern Alex |
+| `@jibsa ask mia to research competitors` | Alternative routing syntax |
+| `@jibsa list interns` or `@jibsa team` | Show all active interns |
+| `@jibsa show alex's jd` | View an intern's Job Description |
+| `@jibsa fire alex` | Deactivate an intern |
+
+### Approval
+
+Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or text replies:
 
 | Approve | Reject / Revise |
 |---------|-----------------|
@@ -49,13 +66,33 @@ You:  "Create a task to review Q1 budget by Friday"
 
 ## Features
 
-| Integration | Capabilities | Status |
-|-------------|-------------|--------|
-| **Slack** | Socket Mode bot, threaded conversations, propose-approve flow | ✅ Live |
-| **Notion** | Schema-free PARA Second Brain — tasks, projects, notes, journals, expenses, workouts, and more (26 databases) | ✅ Live |
-| **Jira** | Ticket sync, morning briefing, EOD review, overdue alerts | 🔜 Phase 3 |
-| **Google Calendar** | Event management, scheduled reminders | 🔜 Phase 3 |
-| **Gmail** | Email triage, weekly digest | 🔜 Phase 4 |
+### Multi-Intern System
+- **Conversational hiring** — describe what you need, Jibsa helps you write a complete Job Description
+- **JD validation** — enforces name, role, responsibilities, tool assignments
+- **Per-intern tools** — each intern only sees their assigned tools
+- **Per-intern memory** — interns remember past interactions (capped at 20 entries)
+- **Smart routing** — `@jibsa alex do X`, `@jibsa ask alex to X`, name prefix, etc.
+
+### Tools
+
+| Tool | Type | Description |
+|------|------|-------------|
+| **Notion** | Read + Write | Query and manage tasks, projects, notes, journals, expenses, workouts (26 databases) |
+| **Web Search** | Read-only | DuckDuckGo search — no API key required |
+| **Code Exec** | Read-only | Sandboxed Python execution for calculations and data processing |
+| **Slack** | Write (approval) | Post messages to Slack channels |
+| **Calendar** | Read-only (stub) | Google Calendar integration — coming in Phase 3 |
+
+### Integrations
+
+| Integration | Status |
+|-------------|--------|
+| **Slack** — Socket Mode bot, threaded conversations, Block Kit buttons | ✅ Live |
+| **Notion** — Schema-free PARA Second Brain (26 databases) | ✅ Live |
+| **CrewAI** — Multi-provider LLM orchestration (Claude, GPT-4, Gemini) | ✅ Live |
+| **Jira** — Ticket sync, morning briefing, overdue alerts | 🔜 Phase 3 |
+| **Google Calendar** — Event management, scheduled reminders | 🔜 Phase 3 |
+| **Gmail** — Email triage, weekly digest | 🔜 Phase 4 |
 
 ### Notion Second Brain
 
@@ -87,7 +124,7 @@ uv pip install -r requirements.txt
 
 # 3. Configure
 cp .env.example .env
-# Edit .env with your Slack and Notion tokens
+# Edit .env with your Slack tokens and Notion token
 
 cp config/notion_databases.yaml.example config/notion_databases.yaml
 # Edit with your Notion database IDs
@@ -96,7 +133,7 @@ cp config/notion_databases.yaml.example config/notion_databases.yaml
 python -m src.app
 
 # 5. Talk to Jibsa
-# Go to #jibsa in Slack and say hello
+# Go to #jibsa in Slack and say: "hire a content marketing intern"
 ```
 
 ### With Docker
@@ -114,6 +151,7 @@ docker-compose up -d
 
 - **[Slack App Setup](docs/slack-setup.md)** — Create and configure the Slack app
 - **[Notion Setup](docs/notion-setup.md)** — Connect your Notion Second Brain
+- **[Contributing](CONTRIBUTING.md)** — Development setup, testing, architecture
 
 ---
 
@@ -123,10 +161,29 @@ All behaviour is controlled via YAML files in `config/`:
 
 | File | Purpose |
 |------|---------|
-| `settings.yaml` | Channel, timezone, schedules, approval keywords |
+| `settings.yaml` | LLM provider, channel, timezone, approval keywords, integrations |
 | `persona.yaml` | Jibsa's name, tone, and personality |
-| `notion_databases.yaml` | Notion database IDs and keyword routing |
-| `prompts/system.txt` | Claude system prompt template |
+| `notion_databases.yaml` | Notion database IDs and keyword routing (gitignored) |
+| `prompts/system.txt` | Jibsa orchestrator system prompt |
+| `prompts/intern.txt` | Intern-specific system prompt template |
+| `prompts/hire.txt` | Hiring flow system prompt |
+
+### LLM Configuration
+
+Jibsa uses CrewAI with multi-provider support. Configure in `config/settings.yaml`:
+
+```yaml
+llm:
+  provider: "anthropic"          # "anthropic", "openai", or "google"
+  model: "claude-sonnet-4-20250514"
+  temperature: 0.7
+  max_tokens: 4096
+```
+
+Set the corresponding API key in `.env`:
+- Anthropic: `ANTHROPIC_API_KEY`
+- OpenAI: `OPENAI_API_KEY`
+- Google: `GOOGLE_API_KEY`
 
 Secrets go in `.env` (never committed).
 
@@ -137,22 +194,36 @@ Secrets go in `.env` (never committed).
 ```
 jibsa-ai/
 ├── src/
-│   ├── app.py                  # Slack Bolt entry point (Socket Mode)
-│   ├── orchestrator.py         # Routes messages, manages approve flow, history
-│   ├── claude_runner.py        # Wraps `claude -p` subprocess
+│   ├── app.py                  # Slack Bolt entry point (Socket Mode + Block Kit actions)
+│   ├── orchestrator.py         # Central router: messages → interns → CrewAI → approval
+│   ├── crew_runner.py          # CrewAI Agent/Task/Crew builder (primary engine)
+│   ├── router.py               # Message parsing and intern name routing
+│   ├── hire_flow.py            # Conversational JD creation flow
+│   ├── intern_registry.py      # CRUD for interns (Notion-backed, cached)
+│   ├── tool_registry.py        # Tool catalog + per-intern permission checking
 │   ├── approval.py             # ApprovalState machine per Slack thread
+│   ├── models/
+│   │   └── intern.py           # InternJD dataclass (validation, memory, formatting)
+│   ├── tools/
+│   │   ├── notion_read_tool.py # CrewAI BaseTool: Notion queries
+│   │   ├── web_search_tool.py  # CrewAI BaseTool: DuckDuckGo search
+│   │   ├── code_exec_tool.py   # CrewAI BaseTool: sandboxed Python
+│   │   ├── slack_tool.py       # CrewAI BaseTool: Slack post (write, needs approval)
+│   │   └── calendar_tool.py    # CrewAI BaseTool: Calendar stub (Phase 3)
 │   └── integrations/
 │       ├── notion_client.py    # Thin Notion SDK wrapper
 │       └── notion_second_brain.py  # Schema-free PARA operations
 │
 ├── config/
-│   ├── settings.yaml           # Channel, timezone, schedules
+│   ├── settings.yaml           # LLM, channel, timezone, approval, integrations
 │   ├── persona.yaml            # Jibsa's personality
 │   ├── notion_databases.yaml   # Notion DB mappings (gitignored)
 │   └── prompts/
-│       └── system.txt          # Claude system prompt template
+│       ├── system.txt          # Jibsa orchestrator prompt
+│       ├── intern.txt          # Intern system prompt template
+│       └── hire.txt            # Hire flow prompt
 │
-├── tests/                      # pytest test suite (55 passing)
+├── tests/                      # pytest test suite (181 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
 ├── Dockerfile
@@ -166,21 +237,30 @@ jibsa-ai/
 
 ```mermaid
 graph TD
-    User["👤 You in #jibsa"] -->|message| SlackSocket["Slack Socket Mode"]
+    User["👤 You in #jibsa"] -->|"@jibsa alex do X"| SlackSocket["Slack Socket Mode"]
 
-    SlackSocket --> App["app.py\nSlack Bolt"]
-    App --> Orchestrator["orchestrator.py\nRoute + History"]
+    SlackSocket --> App["app.py\nSlack Bolt + Block Kit"]
+    App --> Router["router.py\nParse & Route"]
 
-    Orchestrator -->|question| Claude["claude_runner.py\nclaude -p"]
-    Orchestrator -->|action request| Approval["approval.py\nPropose-Approve Gate"]
+    Router -->|hire request| HireFlow["hire_flow.py\nJD Builder"]
+    Router -->|intern task| Orchestrator["orchestrator.py\nOrchestrator"]
+    Router -->|management cmd| Orchestrator
 
-    Approval -->|✅ approved| Claude
-    Approval -->|❌ rejected| User
+    HireFlow -->|JD complete| Registry["intern_registry.py\nNotion-backed"]
 
-    Claude -->|tool call| Notion["notion_second_brain.py\nSchema-free PARA"]
-    Claude -->|response| Orchestrator
-    Orchestrator -->|reply| SlackSocket
-    Notion -->|API| NotionAPI["Notion API"]
+    Orchestrator --> CrewRunner["crew_runner.py\nCrewAI Engine"]
+
+    CrewRunner -->|"Agent + Task + Crew"| CrewAI["CrewAI\n(Claude / GPT-4 / Gemini)"]
+
+    CrewAI -->|tool call| Tools["Tools\nNotion · Web Search\nCode Exec · Slack"]
+    CrewAI -->|action plan| Approval["approval.py\nBlock Kit ✅ / ❌"]
+
+    Approval -->|approved| Execute["Execute Plan\nNotion writes · Slack posts"]
+    Approval -->|rejected| User
+
+    Tools -->|read results| CrewAI
+    Execute -->|confirm| User
+    CrewAI -->|response| User
 ```
 
 ---
@@ -189,13 +269,32 @@ graph TD
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| LLM interface | `claude -p` CLI | Uses Claude Max quota, no API key cost |
+| Orchestration | CrewAI | Native multi-provider LLM, Agent/Task/Crew model, built-in tool use |
+| LLM support | Multi-provider | `anthropic/claude`, `openai/gpt-4o`, `google/gemini` via CrewAI |
 | Slack transport | Socket Mode | No public URL or reverse proxy needed |
-| Approval gate | Propose-approve in thread | Jibsa never writes to external systems without explicit approval |
-| Notion reads | Page flattening | Any page → flat key-value JSON, passed raw to Claude |
+| Approval gate | Block Kit buttons + text | Interactive ✅/❌ buttons with text fallback |
+| Tool isolation | Per-intern filtering | Each intern only accesses tools listed in their JD |
+| Notion reads | Page flattening | Any page → flat key-value JSON, passed raw to LLM |
 | Notion writes | Runtime schema discovery | Auto-detect property types, no hardcoded schemas |
-| Database routing | Keyword matching | Config-driven — add any database without code changes |
-| State management | Per-thread conversation history | Maintained in orchestrator, capped at 20 message pairs |
+| Intern storage | Notion database | JDs stored in Notion Interns DB with caching |
+| Database routing | Keyword matching | Config-driven — add any Notion database without code changes |
+
+---
+
+## Testing
+
+```bash
+# Run all tests
+.venv/bin/python -m pytest tests/ -v
+
+# Run a specific test file
+.venv/bin/python -m pytest tests/test_orchestrator.py -v
+
+# Run with coverage
+.venv/bin/python -m pytest tests/ --cov=src --cov-report=term-missing
+```
+
+181 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 5 tools, orchestrator, Notion second brain.
 
 ---
 
@@ -203,9 +302,9 @@ graph TD
 
 - Python 3.12+
 - [uv](https://github.com/astral-sh/uv) (recommended) or pip
-- A [Slack app](https://api.slack.com/apps) with Socket Mode enabled
-- Claude CLI authenticated (`claude` in PATH, Max plan)
-- Notion integration token (for Second Brain features)
+- A [Slack app](https://api.slack.com/apps) with Socket Mode + Interactivity enabled
+- LLM API key (Anthropic, OpenAI, or Google — depending on `settings.yaml` config)
+- Notion integration token (for Second Brain + intern storage)
 
 ---
 
@@ -215,9 +314,10 @@ graph TD
 |-------|-------|--------|
 | **1** | Core loop: Slack bot + Claude + propose-approve flow | ✅ Done |
 | **2** | Notion Second Brain (PARA: 26 databases, schema-free) | ✅ Done |
+| **2.5** | Multi-intern platform: CrewAI, hiring flow, 5 tools, Block Kit | ✅ Done |
 | **3** | Jira + Google Calendar + scheduled jobs (morning briefing, EOD review) | 🔜 |
 | **4** | Gmail + weekly digest + team interactions | 🔜 |
-| **5** | Setup wizard, Slack Block Kit, audit logging, open-source polish | 🔜 |
+| **5** | Setup wizard, audit logging, open-source polish | 🔜 |
 
 ## License
 

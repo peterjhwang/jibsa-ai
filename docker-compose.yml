@@ -1,16 +1,12 @@
-version: '3.8'
-
 services:
   jibsa:
     build: .
     env_file: .env
     volumes:
-      # Claude OAuth credentials (read-only)
-      - ~/.claude:/home/jibsa/.claude:ro
+      # User configuration (read-only)
+      - ./config:/app/config:ro
       # Google OAuth token (Calendar + Gmail — Phase 3/4)
       - ./data/google-token:/app/tokens
       # APScheduler SQLite persistence (Phase 3)
       - ./data/scheduler:/app/scheduler-db
-      # User configuration (read-only)
-      - ./config:/app/config:ro
     restart: unless-stopped

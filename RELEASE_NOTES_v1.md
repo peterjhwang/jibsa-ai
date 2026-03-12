@@ -1,0 +1,73 @@
+# Jibsa v1.0 Release Notes
+
+**Release date**: March 13, 2026
+**Tag**: `v1.0`
+
+## What is Jibsa?
+
+Jibsa (집사, Korean for "steward") is an open-source multi-AI-intern platform that lives in your Slack workspace. Create custom AI interns with job descriptions, tools, and approval rules, and delegate tasks via `@jibsa`.
+
+## What's New in v1.0
+
+### Multi-Intern Platform
+- **Conversational hiring** — describe what you need, Jibsa helps write a complete Job Description
+- **Intern registry** — stored in Notion with caching, CRUD via Slack commands
+- **Smart routing** — `@jibsa alex do X`, `@jibsa ask mia to research Y`
+- **Per-intern tools** — each intern only accesses their assigned tools
+- **Per-intern memory** — interns remember past interactions (capped at 20)
+- **JD validation** — enforces name, role, responsibilities, tool name validation
+
+### CrewAI Orchestration
+- Each intern request spawns a CrewAI Agent + Task + Crew
+- **Multi-provider LLM** — Claude, GPT-4, Gemini via `provider/model` config
+- Read-only tools execute during reasoning; write tools produce action plans for approval
+- InternJD maps to CrewAI Role + Backstory + Goals
+
+### 5 Built-in Tools
+| Tool | Type | Description |
+|------|------|-------------|
+| Notion | Read + Write | Query and manage 26 databases (tasks, projects, notes, etc.) |
+| Web Search | Read-only | DuckDuckGo — no API key required |
+| Code Exec | Read-only | Sandboxed Python subprocess |
+| Slack | Write | Post messages to channels (requires approval) |
+| Calendar | Read-only | Google Calendar stub (Phase 3) |
+
+### Block Kit Approval Buttons
+- Action plans now show interactive **Approve** / **Reject** buttons in Slack
+- Text-based approval (✅/❌) still works as fallback
+- Buttons trigger immediate execution or rejection
+
+### Management Commands (all via `@jibsa` mention)
+- `@jibsa hire a <role> intern` — start hiring flow
+- `@jibsa list interns` / `@jibsa team` — show all active interns
+- `@jibsa show alex's jd` — view an intern's Job Description
+- `@jibsa fire alex` — deactivate an intern
+
+### Notion Second Brain (from v0.5)
+- Schema-free architecture — no hardcoded property names
+- 26 databases supported via keyword routing
+- Actions: `create_task`, `update_task_status`, `create_project`, `create_note`, `create_journal_entry`, `log_expense`, `log_workout`
+
+## Technical Details
+
+- **181 automated tests** — 10 test files covering all modules
+- **Python 3.12+** with `uv` package management
+- **Slack Socket Mode** — no public URL needed
+- **Docker support** — `docker-compose up -d`
+- **Config-driven** — LLM provider, tools, approval keywords all in YAML
+
+## Upgrade Path
+
+This is the first major release. For existing v0.5 users:
+
+1. `uv pip install -r requirements.txt` (adds `crewai`, `duckduckgo-search`)
+2. Add `llm:` section to `config/settings.yaml` (see settings.yaml for format)
+3. Set `ANTHROPIC_API_KEY` (or other LLM provider key) in `.env`
+4. Add an "Interns" database to `config/notion_databases.yaml`
+5. Restart: `python -m src.app`
+
+## What's Next
+
+- **Phase 3**: Jira integration + Google Calendar + APScheduler (morning briefing, EOD review, overdue alerts)
+- **Phase 4**: Gmail + weekly digest + team interactions
+- **Phase 5**: Setup wizard, audit logging, open-source polish

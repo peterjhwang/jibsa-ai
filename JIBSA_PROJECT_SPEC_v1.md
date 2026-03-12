@@ -80,11 +80,15 @@ Any Slack user can create custom AI interns (with job descriptions + tools + app
 - [x] Docker Compose + Dockerfile updated (removed Claude CLI dependency)
 - [x] License + open-source badge (MIT)
 
-### 7. Testing & Release — TODO
-- [ ] Manual end-to-end tests with 3 interns + real tasks
-- [ ] Verify Block Kit buttons work in live Slack
-- [ ] Verify Slack post tool executes after approval
-- [ ] Tag v1.0 + write release notes
+### 7. Testing & Release — IN PROGRESS
+- [x] 181 automated tests passing (router, approval, CrewAI, hire flow, intern model, tools, orchestrator, Notion)
+- [x] All imports verified, TOOL_CATALOG ↔ VALID_TOOL_NAMES in sync
+- [x] Config load + app creation smoke test passing
+- [x] Block Kit blocks structure validated (3 blocks: summary, steps, 2 buttons)
+- [x] Button action handler flow verified (approve → execute → clear state)
+- [ ] Manual end-to-end tests with 3 interns + real tasks in live Slack
+- [ ] Verify Block Kit buttons render and respond in live Slack
+- [ ] Tag v1.0 + release notes
 
 ## Out of Scope for v1.0
 - Real per-intern Slack bots (custom @mentions)

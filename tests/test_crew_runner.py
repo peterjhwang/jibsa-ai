@@ -141,6 +141,94 @@ def test_run_for_intern_returns_string(MockAgent, MockTask, MockCrew):
 
 
 # ---------------------------------------------------------------------------
+# CrewRunner.run_for_team (mocked)
+# ---------------------------------------------------------------------------
+
+@patch("src.crew_runner.Crew")
+@patch("src.crew_runner.Task")
+@patch("src.crew_runner.Agent")
+def test_run_for_team_returns_string(MockAgent, MockTask, MockCrew):
+    mock_result = MagicMock()
+    mock_result.raw = "Here is the combined team analysis..."
+    MockCrew.return_value.kickoff.return_value = mock_result
+
+    config = {"jibsa": {"timezone": "UTC"}, "llm": {"provider": "anthropic"}}
+    runner = CrewRunner(config)
+    team = [
+        {"name": "Alex", "role": "Dev", "backstory": "You are Alex, a developer.", "tools": []},
+        {"name": "Sarah", "role": "QA", "backstory": "You are Sarah, a QA engineer.", "tools": []},
+    ]
+    result = runner.run_for_team(user_message="review the code", team=team)
+
+    assert isinstance(result, str)
+    assert "team analysis" in result
+
+
+@patch("src.crew_runner.Crew")
+@patch("src.crew_runner.Task")
+@patch("src.crew_runner.Agent")
+def test_run_for_team_returns_action_plan(MockAgent, MockTask, MockCrew):
+    mock_result = MagicMock()
+    mock_result.raw = '{"type": "action_plan", "summary": "Team plan", "steps": []}'
+    MockCrew.return_value.kickoff.return_value = mock_result
+
+    config = {"jibsa": {"timezone": "UTC"}, "llm": {"provider": "anthropic"}}
+    runner = CrewRunner(config)
+    team = [
+        {"name": "Alex", "role": "Dev", "backstory": "Dev backstory", "tools": []},
+        {"name": "Sarah", "role": "QA", "backstory": "QA backstory", "tools": []},
+    ]
+    result = runner.run_for_team(user_message="create tasks", team=team)
+
+    assert isinstance(result, dict)
+    assert result["type"] == "action_plan"
+
+
+@patch("src.crew_runner.Crew")
+@patch("src.crew_runner.Task")
+@patch("src.crew_runner.Agent")
+def test_run_for_team_handles_error(MockAgent, MockTask, MockCrew):
+    MockCrew.return_value.kickoff.side_effect = Exception("Team API error")
+
+    config = {"jibsa": {"timezone": "UTC"}, "llm": {"provider": "anthropic"}}
+    runner = CrewRunner(config)
+    team = [
+        {"name": "Alex", "role": "Dev", "backstory": "Dev backstory", "tools": []},
+        {"name": "Sarah", "role": "QA", "backstory": "QA backstory", "tools": []},
+    ]
+    result = runner.run_for_team(user_message="do something", team=team)
+
+    assert isinstance(result, str)
+    assert "⚠️" in result
+
+
+@patch("src.crew_runner.Crew")
+@patch("src.crew_runner.Task")
+@patch("src.crew_runner.Agent")
+def test_run_for_team_creates_multiple_agents(MockAgent, MockTask, MockCrew):
+    mock_result = MagicMock()
+    mock_result.raw = "Done"
+    MockCrew.return_value.kickoff.return_value = mock_result
+
+    config = {"jibsa": {"timezone": "UTC"}, "llm": {"provider": "anthropic"}}
+    runner = CrewRunner(config)
+    team = [
+        {"name": "Alex", "role": "Dev", "backstory": "Dev", "tools": []},
+        {"name": "Sarah", "role": "QA", "backstory": "QA", "tools": []},
+        {"name": "Bob", "role": "PM", "backstory": "PM", "tools": []},
+    ]
+    runner.run_for_team(user_message="plan sprint", team=team)
+
+    # Should create 3 agents and 3 tasks
+    assert MockAgent.call_count == 3
+    assert MockTask.call_count == 3
+    # Crew should be initialized with 3 agents and 3 tasks
+    crew_call = MockCrew.call_args
+    assert len(crew_call.kwargs["agents"]) == 3
+    assert len(crew_call.kwargs["tasks"]) == 3
+
+
+# ---------------------------------------------------------------------------
 # CrewRunner.run_for_hire (mocked)
 # ---------------------------------------------------------------------------
 

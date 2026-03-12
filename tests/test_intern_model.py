@@ -110,6 +110,41 @@ def test_get_memory_context_empty():
     assert intern.get_memory_context() == ""
 
 
+def test_add_memory_with_channel():
+    intern = InternJD(name="Alex", role="Role", responsibilities=["X"], tone="", tools_allowed=[], autonomy_rules="")
+    intern.add_memory("HR context", channel="C-HR")
+    intern.add_memory("Dev context", channel="C-DEV")
+    assert len(intern.channel_memory["C-HR"]) == 1
+    assert len(intern.channel_memory["C-DEV"]) == 1
+    assert len(intern.memory) == 0  # global is empty
+
+
+def test_get_memory_context_includes_channel():
+    intern = InternJD(name="Alex", role="Role", responsibilities=["X"], tone="", tools_allowed=[], autonomy_rules="")
+    intern.add_memory("Global memory")
+    intern.add_memory("HR specific", channel="C-HR")
+    context = intern.get_memory_context(channel="C-HR")
+    assert "Global memory" in context
+    assert "HR specific" in context
+
+
+def test_get_memory_context_excludes_other_channels():
+    intern = InternJD(name="Alex", role="Role", responsibilities=["X"], tone="", tools_allowed=[], autonomy_rules="")
+    intern.add_memory("HR secret", channel="C-HR")
+    intern.add_memory("Dev stuff", channel="C-DEV")
+    context = intern.get_memory_context(channel="C-DEV")
+    assert "HR secret" not in context
+    assert "Dev stuff" in context
+
+
+def test_channel_memory_caps_at_20():
+    intern = InternJD(name="Alex", role="Role", responsibilities=["X"], tone="", tools_allowed=[], autonomy_rules="")
+    for i in range(25):
+        intern.add_memory(f"Memory {i}", channel="C1")
+    assert len(intern.channel_memory["C1"]) == 20
+    assert "Memory 24" in intern.channel_memory["C1"][-1]
+
+
 def test_get_memory_context_with_entries():
     intern = InternJD(
         name="Alex", role="Role", responsibilities=["X"],

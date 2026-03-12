@@ -12,7 +12,7 @@ Patterns:
 """
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -20,11 +20,37 @@ logger = logging.getLogger(__name__)
 HIRE_KEYWORDS = {"hire", "create intern", "new intern", "add intern"}
 
 
+def _parse_team_request(text: str, known_names: set[str]) -> tuple[list[str], str]:
+    """Parse 'alex, sarah to do something' into ([names], task).
+
+    Handles:
+      - "alex, sarah to ..."
+      - "alex and sarah to ..."
+      - "alex, sarah, bob to ..."
+    """
+    # Split on "to " to separate names from task
+    parts = re.split(r"\s+to\s+", text, maxsplit=1)
+    if len(parts) != 2:
+        return [], text
+
+    names_str, task = parts
+    # Parse names: split on comma, "and", or whitespace
+    raw_names = re.split(r"[,\s]+(?:and\s+)?|(?:\s+and\s+)", names_str.strip())
+    names = [n.strip().lower() for n in raw_names if n.strip().lower() in known_names]
+
+    if len(names) < 2:
+        return [], text
+
+    return names, task.strip()
+
+
 @dataclass
 class RouteResult:
     intern_name: Optional[str]  # None = Jibsa orchestrator
     message: str                # cleaned message for the target
     is_hire: bool = False       # hire flow trigger
+    is_team: bool = False       # multi-intern team request
+    team_names: list[str] = field(default_factory=list)
 
 
 class MessageRouter:
@@ -45,6 +71,16 @@ class MessageRouter:
         for kw in HIRE_KEYWORDS:
             if cleaned_lower.startswith(kw):
                 return RouteResult(intern_name=None, message=cleaned, is_hire=True)
+
+        # Check for "form team" intent
+        if cleaned_lower.startswith("form team"):
+            team_text = cleaned[len("form team"):].strip()
+            names, task = _parse_team_request(team_text, self._names)
+            if names:
+                return RouteResult(
+                    intern_name=None, message=task,
+                    is_team=True, team_names=names,
+                )
 
         # Management commands are passed through to orchestrator (not routed to interns)
         if cleaned_lower in ("list interns", "team", "interns", "show team"):

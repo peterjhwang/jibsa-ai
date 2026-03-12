@@ -22,7 +22,8 @@ class InternJD:
     created_by: str = ""                    # Slack user ID
     notion_page_id: str = ""                # Notion page ID where this JD is stored
     active: bool = True
-    memory: list[str] = field(default_factory=list)  # Per-intern memory entries
+    memory: list[str] = field(default_factory=list)  # Per-intern memory entries (global)
+    channel_memory: dict[str, list[str]] = field(default_factory=dict)  # Channel-scoped memory
 
     def matches_name(self, query: str) -> bool:
         """Case-insensitive name match."""
@@ -66,15 +67,25 @@ class InternJD:
             f"*Active:* {'Yes' if self.active else 'No'}"
         )
 
-    def add_memory(self, entry: str) -> None:
-        """Add a memory entry, keeping last 20."""
-        self.memory.append(entry)
-        if len(self.memory) > 20:
-            self.memory = self.memory[-20:]
+    def add_memory(self, entry: str, channel: str = "") -> None:
+        """Add a memory entry. If channel is provided, memory is scoped to that channel."""
+        if channel:
+            if channel not in self.channel_memory:
+                self.channel_memory[channel] = []
+            self.channel_memory[channel].append(entry)
+            if len(self.channel_memory[channel]) > 20:
+                self.channel_memory[channel] = self.channel_memory[channel][-20:]
+        else:
+            self.memory.append(entry)
+            if len(self.memory) > 20:
+                self.memory = self.memory[-20:]
 
-    def get_memory_context(self) -> str:
-        """Format memory for injection into system prompts."""
-        if not self.memory:
+    def get_memory_context(self, channel: str = "") -> str:
+        """Format memory for injection into prompts. Channel-specific + global."""
+        entries = list(self.memory)  # always include global
+        if channel and channel in self.channel_memory:
+            entries.extend(self.channel_memory[channel])
+        if not entries:
             return ""
-        lines = "\n".join(f"- {m}" for m in self.memory)
+        lines = "\n".join(f"- {m}" for m in entries)
         return f"## Your Memory (things you've learned about the user and past work)\n{lines}"

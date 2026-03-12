@@ -236,6 +236,93 @@ class CrewRunner:
             logger.error("Hire crew failed: %s", e)
             return f"⚠️ Something went wrong: {e}"
 
+    def run_for_team(
+        self,
+        user_message: str,
+        team: list[dict],  # list of {"name": str, "role": str, "backstory": str, "tools": list}
+        notion_context: str = "",
+        history: list[dict] | None = None,
+        active_integrations: list[str] | None = None,
+    ) -> dict | str:
+        """Run a multi-agent crew with the given team members."""
+        tz = self.config.get("jibsa", {}).get("timezone", "UTC")
+        now = datetime.now()
+        history_text = self._format_history(history)
+
+        context_section = (
+            f"\n\nNotion Context (live data):\n{notion_context}"
+            if notion_context else ""
+        )
+        integration_lines = (
+            "\n".join(f"- {i}" for i in (active_integrations or []))
+            if active_integrations
+            else "No integrations connected."
+        )
+
+        agents = []
+        for member in team:
+            backstory = (
+                f"{member['backstory']}\n\n"
+                f"Connected integrations:\n{integration_lines}\n\n"
+                f"Today: {now.strftime('%A, %B %d, %Y')} {now.strftime('%H:%M')} {tz}\n\n"
+                f"Conversation history:\n{history_text}"
+                f"{context_section}"
+            )
+            agent = Agent(
+                role=f"{member['name']} — {member['role']}",
+                goal=(
+                    f"Contribute to the team task as {member['name']}, a {member['role']}. "
+                    "Collaborate with your teammates to produce the best result. "
+                    "For write operations, respond with a JSON action plan."
+                ),
+                backstory=backstory,
+                tools=member.get("tools", []),
+                llm=self._llm_string,
+                verbose=False,
+                memory=True,
+                max_iter=self._max_iter,
+            )
+            agents.append(agent)
+
+        # Create tasks — each agent gets the same user request but with their role context
+        tasks = []
+        for agent in agents:
+            task = Task(
+                description=(
+                    f"{user_message}\n\n"
+                    "IMPORTANT: If you need to modify external state, respond with a JSON action plan.\n"
+                    '{"type": "action_plan", "summary": "...", "steps": [...]}\n\n'
+                    "For read-only queries, contribute your analysis directly."
+                ),
+                expected_output="Your contribution to the team task",
+                agent=agent,
+            )
+            tasks.append(task)
+
+        crew = Crew(
+            agents=agents,
+            tasks=tasks,
+            process=Process.sequential,  # agents work one after another
+            verbose=False,
+            memory=True,
+        )
+
+        try:
+            result = self._run_with_timeout(crew)
+            output = str(result.raw) if hasattr(result, "raw") else str(result)
+        except TimeoutError:
+            logger.error("Team crew timed out after %ds", self._crew_timeout)
+            return f"⚠️ Team request timed out after {self._crew_timeout}s."
+        except Exception as e:
+            logger.error("Team crew failed: %s", e)
+            return f"⚠️ Team execution failed: {e}"
+
+        parsed = _extract_json(output)
+        if parsed and parsed.get("type") == "action_plan":
+            return parsed
+
+        return output
+
     def _run_crew(self, agent: Agent, user_message: str) -> dict | str:
         """Create a one-shot Crew and run it. Returns dict (action_plan) or str."""
         task = Task(

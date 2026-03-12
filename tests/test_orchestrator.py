@@ -17,7 +17,10 @@ CONFIG = {
 
 @pytest.fixture
 def mock_slack():
-    return MagicMock()
+    slack = MagicMock()
+    # Default: chat_postMessage returns a dict with "ts" (needed for thinking indicator)
+    slack.chat_postMessage.return_value = {"ts": "thinking-ts"}
+    return slack
 
 
 @pytest.fixture
@@ -34,7 +37,8 @@ def orchestrator(mock_slack):
 def test_conversational_response_posts_text(orchestrator, mock_slack):
     orchestrator.runner.run_for_jibsa.return_value = "Good morning! How can I help?"
     orchestrator.handle_message("C123", "ts-1", "U001", "hello")
-    mock_slack.chat_postMessage.assert_called_once()
+    # 2 calls: thinking indicator + actual response
+    assert mock_slack.chat_postMessage.call_count == 2
     args = mock_slack.chat_postMessage.call_args
     assert "Good morning" in args.kwargs["text"]
 
@@ -49,7 +53,8 @@ def test_action_plan_response_posts_plan_and_sets_pending(orchestrator, mock_sla
     orchestrator.runner.run_for_jibsa.return_value = plan
     orchestrator.handle_message("C123", "ts-2", "U001", "create a jira ticket for the bug")
 
-    mock_slack.chat_postMessage.assert_called_once()
+    # 2 calls: thinking indicator + plan blocks
+    assert mock_slack.chat_postMessage.call_count == 2
     text = mock_slack.chat_postMessage.call_args.kwargs["text"]
     assert "📋" in text
     assert "Create Jira ticket" in text
@@ -100,7 +105,8 @@ def test_hire_message_starts_hire_flow(orchestrator, mock_slack):
 def test_unknown_intern_name_routes_to_jibsa(orchestrator, mock_slack):
     orchestrator.runner.run_for_jibsa.return_value = "I can help with that."
     orchestrator.handle_message("C123", "ts-6", "U001", "bob do something")
-    mock_slack.chat_postMessage.assert_called_once()
+    # 2 calls: thinking indicator + response
+    assert mock_slack.chat_postMessage.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +123,39 @@ def test_list_interns_command(orchestrator, mock_slack):
 def test_team_command(orchestrator, mock_slack):
     orchestrator.handle_message("C123", "ts-8", "U001", "team")
     mock_slack.chat_postMessage.assert_called_once()
+
+
+def test_stats_command(orchestrator, mock_slack):
+    orchestrator.handle_message("C123", "ts-stats", "U001", "stats")
+    mock_slack.chat_postMessage.assert_called_once()
+    text = mock_slack.chat_postMessage.call_args.kwargs["text"]
+    assert "No requests" in text or "Stats" in text or "stats" in text.lower()
+
+
+def test_form_team_routes_correctly(orchestrator, mock_slack):
+    """form team should invoke run_for_team when interns are registered."""
+    orchestrator.runner.run_for_team = MagicMock(return_value="Team analysis complete")
+    from src.models.intern import InternJD
+    alex = InternJD(name="Alex", role="Dev", responsibilities=["Code"], tone="direct", tools_allowed=["notion"], autonomy_rules="ask before acting")
+    sarah = InternJD(name="Sarah", role="QA", responsibilities=["Test"], tone="friendly", tools_allowed=["notion"], autonomy_rules="ask before acting")
+    orchestrator.intern_registry._cache = [alex, sarah]
+    orchestrator.router.update_names(["alex", "sarah"])
+
+    orchestrator.handle_message("C123", "ts-team", "U001", "form team alex, sarah to review the code")
+    orchestrator.runner.run_for_team.assert_called_once()
+    mock_slack.chat_postMessage.assert_called()
+    text = mock_slack.chat_postMessage.call_args.kwargs["text"]
+    assert "Team" in text
+
+
+def test_form_team_unknown_intern_posts_warning(orchestrator, mock_slack):
+    """form team with an unknown intern should post a warning."""
+    orchestrator.router.update_names(["alex", "sarah"])
+    # Don't register the interns in the registry — get_intern will return None
+    orchestrator.handle_message("C123", "ts-team2", "U001", "form team alex, sarah to do stuff")
+    mock_slack.chat_postMessage.assert_called()
+    text = mock_slack.chat_postMessage.call_args.kwargs["text"]
+    assert "Unknown intern" in text
 
 
 def test_fire_unknown_intern(orchestrator, mock_slack):
@@ -192,10 +231,64 @@ def test_action_plan_posts_blocks(orchestrator, mock_slack):
     }
     orchestrator.runner.run_for_jibsa.return_value = plan
     orchestrator.handle_message("C123", "ts-13", "U001", "create a task for code review")
-    # Should post with blocks
+    # Last call should post with blocks (first call is thinking indicator)
     call_kwargs = mock_slack.chat_postMessage.call_args.kwargs
     assert "blocks" in call_kwargs
     assert any(b["type"] == "actions" for b in call_kwargs["blocks"])
+
+
+# ---------------------------------------------------------------------------
+# Slack execution
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Thinking indicator
+# ---------------------------------------------------------------------------
+
+def test_thinking_indicator_posted_and_removed(orchestrator, mock_slack):
+    """Thinking indicator is posted before CrewAI and deleted after."""
+    mock_slack.chat_postMessage.return_value = {"ts": "thinking-ts"}
+    orchestrator.runner.run_for_jibsa.return_value = "Here's your answer"
+    orchestrator.handle_message("C123", "ts-20", "U001", "what tasks do I have?")
+
+    # Should have posted thinking + response = 2 calls
+    assert mock_slack.chat_postMessage.call_count == 2
+    # First call is the thinking indicator
+    first_call = mock_slack.chat_postMessage.call_args_list[0]
+    assert "Thinking" in first_call.kwargs["text"]
+    # Should have deleted the thinking message
+    mock_slack.chat_delete.assert_called_once_with(channel="C123", ts="thinking-ts")
+
+
+def test_thinking_indicator_not_posted_for_management_commands(orchestrator, mock_slack):
+    """Management commands should NOT show a thinking indicator."""
+    orchestrator.handle_message("C123", "ts-21", "U001", "list interns")
+    # Only 1 call (no thinking indicator)
+    assert mock_slack.chat_postMessage.call_count == 1
+    mock_slack.chat_delete.assert_not_called()
+
+
+def test_thinking_indicator_not_posted_for_approval(orchestrator, mock_slack):
+    """Approval responses should NOT show a thinking indicator."""
+    plan = {"type": "action_plan", "summary": "Test", "steps": [], "needs_approval": True}
+    orchestrator.approval.set_pending("ts-22", plan, "C123")
+    orchestrator.handle_message("C123", "ts-22", "U001", "yes")
+    # Only 1 call (execution result), no thinking indicator
+    assert mock_slack.chat_postMessage.call_count == 1
+    mock_slack.chat_delete.assert_not_called()
+
+
+def test_thinking_indicator_graceful_on_post_failure(orchestrator, mock_slack):
+    """If posting the thinking indicator fails, execution still proceeds."""
+    mock_slack.chat_postMessage.side_effect = [
+        Exception("Slack down"),  # thinking indicator fails
+        {"ts": "resp-ts"},        # response succeeds
+    ]
+    orchestrator.runner.run_for_jibsa.return_value = "Here's your answer"
+    # Should not raise
+    orchestrator.handle_message("C123", "ts-23", "U001", "what tasks do I have?")
+    # chat_delete should not be called since thinking_ts is None
+    mock_slack.chat_delete.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

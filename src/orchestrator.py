@@ -16,8 +16,10 @@ from pathlib import Path
 from typing import Any
 
 from .approval import ApprovalManager, ApprovalState
+from .circuit_breaker import CircuitBreaker, CircuitOpenError
 from .crew_runner import CrewRunner
 from .hire_flow import HireFlowManager
+from .metrics import MetricsTracker
 from .intern_registry import InternRegistry
 from .integrations.notion_second_brain import build_second_brain
 from .models.intern import InternJD
@@ -35,7 +37,7 @@ _CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 # Commands handled directly by the orchestrator (not routed to interns/LLM)
 MANAGEMENT_COMMANDS = {
-    "list interns", "team", "interns", "show team",
+    "list interns", "team", "interns", "show team", "stats",
 }
 
 
@@ -58,6 +60,9 @@ class Orchestrator:
         # CrewAI runner
         self.runner = CrewRunner(config)
 
+        # Metrics
+        self.metrics = MetricsTracker()
+
         # Tool registry with CrewAI tool instances
         self.tool_registry = ToolRegistry()
         self._register_crewai_tools()
@@ -74,6 +79,9 @@ class Orchestrator:
 
         # Track which intern is active per thread (for approval context)
         self._thread_intern: dict[str, str | None] = {}
+
+        # Circuit breaker for Notion API calls
+        self._notion_circuit = CircuitBreaker("notion", failure_threshold=3, recovery_timeout=60)
 
     def _register_crewai_tools(self) -> None:
         """Create and register CrewAI tool instances."""
@@ -142,8 +150,12 @@ class Orchestrator:
         route = self.router.route(text)
 
         # Management commands
-        if route.message.lower().strip() in MANAGEMENT_COMMANDS:
-            self._handle_list_interns(channel, thread_ts)
+        cmd = route.message.lower().strip()
+        if cmd in MANAGEMENT_COMMANDS:
+            if cmd == "stats":
+                self._handle_stats(channel, thread_ts)
+            else:
+                self._handle_list_interns(channel, thread_ts)
             return
 
         # Show intern JD: "show alex's jd" or "show alex"
@@ -158,6 +170,10 @@ class Orchestrator:
         if route.message.lower().startswith("fire ") and not route.intern_name:
             intern_name = route.message[5:].strip()
             self._handle_fire_intern(channel, thread_ts, intern_name)
+            return
+
+        if route.is_team:
+            self._handle_team_request(channel, thread_ts, user, route.message, route.team_names)
             return
 
         if route.is_hire:
@@ -208,6 +224,10 @@ class Orchestrator:
         else:
             self._post(channel, thread_ts, f"⚠️ {result.get('error', 'Could not fire intern')}")
 
+    def _handle_stats(self, channel: str, thread_ts: str) -> None:
+        """Display usage statistics."""
+        self._post(channel, thread_ts, self.metrics.format_stats())
+
     # ------------------------------------------------------------------
     # Hire flow
     # ------------------------------------------------------------------
@@ -217,6 +237,101 @@ class Orchestrator:
         self.hire_flow.start_session(thread_ts, user, text)
         response = self.hire_flow.handle(thread_ts, user, text)
         self._post(channel, thread_ts, response)
+
+    # ------------------------------------------------------------------
+    # Team request handling
+    # ------------------------------------------------------------------
+
+    def _handle_team_request(
+        self,
+        channel: str,
+        thread_ts: str,
+        user: str,
+        text: str,
+        team_names: list[str],
+    ) -> None:
+        """Handle a multi-intern team request."""
+        # Resolve intern objects
+        team_interns = []
+        for name in team_names:
+            intern = self.intern_registry.get_intern(name)
+            if not intern:
+                self._post(channel, thread_ts, f"⚠️ Unknown intern: '{name}'")
+                return
+            team_interns.append(intern)
+
+        history = self._get_history(thread_ts)
+        active = _active_integrations(self.config)
+        notion_context = self._get_notion_context(text)
+
+        # Build team member specs
+        team_specs = []
+        for intern in team_interns:
+            responsibilities = "\n".join(f"- {r}" for r in intern.responsibilities)
+            tools_desc = self.tool_registry.get_tool_descriptions_for_prompt(intern)
+            backstory = (
+                f"You are {intern.name}, a {intern.role}.\n\n"
+                f"Responsibilities:\n{responsibilities}\n\n"
+                f"Communication style: {intern.tone}\n\n"
+                f"Tools available:\n{tools_desc}"
+            )
+            crewai_tools = self.tool_registry.get_crewai_tools_for_intern(intern)
+            team_specs.append({
+                "name": intern.name,
+                "role": intern.role,
+                "backstory": backstory,
+                "tools": crewai_tools,
+            })
+
+        names_str = " + ".join(i.name for i in team_interns)
+        prefix = f"*[Team: {names_str}]*\n"
+
+        response = self.runner.run_for_team(
+            user_message=text,
+            team=team_specs,
+            notion_context=notion_context,
+            history=history,
+            active_integrations=active,
+        )
+
+        self._add_to_history(thread_ts, "user", text)
+
+        if isinstance(response, dict) and response.get("type") == "action_plan":
+            plan_text = self._format_plan(response)
+            full_text = f"{prefix}{plan_text}"
+            blocks = self._format_plan_blocks(response, full_text)
+            blocks.insert(0, {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": prefix.strip()},
+            })
+            self._post_blocks(channel, thread_ts, blocks, full_text)
+            self.approval.set_pending(thread_ts, response, channel)
+            self._add_to_history(thread_ts, "assistant", plan_text)
+        else:
+            response_str = str(response)
+            self._post(channel, thread_ts, f"{prefix}{response_str}")
+            self._add_to_history(thread_ts, "assistant", response_str)
+
+    # ------------------------------------------------------------------
+    # Notion context (circuit-breaker protected)
+    # ------------------------------------------------------------------
+
+    def _get_notion_context(self, text: str) -> str:
+        """Fetch Notion context with circuit breaker protection."""
+        if not self.notion:
+            return ""
+        try:
+            self._notion_circuit.check()
+            context = self.notion.get_context_for_request(text)
+            self._notion_circuit.record_success()
+            return context
+        except CircuitOpenError:
+            logger.debug("Notion circuit open — skipping context enrichment")
+            return ""
+        except Exception:
+            self._notion_circuit.record_failure()
+            logger.warning("Notion context enrichment failed", exc_info=True)
+            return ""
 
     # ------------------------------------------------------------------
     # Intern request handling (CrewAI)
@@ -235,12 +350,7 @@ class Orchestrator:
         active = _active_integrations(self.config)
 
         # Get Notion context for enrichment
-        notion_context = ""
-        if self.notion:
-            try:
-                notion_context = self.notion.get_context_for_request(text)
-            except Exception:
-                logger.warning("Notion context enrichment failed", exc_info=True)
+        notion_context = self._get_notion_context(text)
 
         # Build intern backstory from JD
         responsibilities = "\n".join(f"- {r}" for r in intern.responsibilities)
@@ -259,8 +369,11 @@ class Orchestrator:
         crewai_tools = self.tool_registry.get_crewai_tools_for_intern(intern)
 
         # Memory context
-        memory_context = intern.get_memory_context()
+        memory_context = intern.get_memory_context(channel=channel)
 
+        thinking_ts = self._post_thinking(channel, thread_ts)
+
+        start = time.monotonic()
         response = self.runner.run_for_intern(
             user_message=text,
             intern_name=intern.name,
@@ -272,6 +385,14 @@ class Orchestrator:
             memory_context=memory_context,
             active_integrations=active,
         )
+        latency = time.monotonic() - start
+
+        is_plan = isinstance(response, dict) and response.get("type") == "action_plan"
+        is_error = isinstance(response, str) and response.startswith("⚠️")
+        self.metrics.record_request(intern.name.lower(), latency, was_action_plan=is_plan, error=is_error)
+
+        if thinking_ts:
+            self._delete_message(channel, thinking_ts)
 
         self._add_to_history(thread_ts, "user", text)
         self._thread_intern[thread_ts] = intern.name.lower()
@@ -309,7 +430,7 @@ class Orchestrator:
 
             # Update intern memory with a summary of the interaction
             if len(response_str) > 20:
-                intern.add_memory(f"User asked: {text[:100]}... → Responded about {intern.role} duties")
+                intern.add_memory(f"User asked: {text[:100]}... → Responded about {intern.role} duties", channel=channel)
 
     # ------------------------------------------------------------------
     # Jibsa orchestrator handlers
@@ -325,6 +446,7 @@ class Orchestrator:
         if self.approval.is_approval(text):
             logger.info("Thread %s — plan approved", thread_ts)
             intern_name = self._thread_intern.get(thread_ts)
+            self.metrics.record_approval(intern_name or "jibsa")
             self._execute_plan(ctx.pending_plan, channel, thread_ts, intern_name)
             self.approval.clear(thread_ts)
 
@@ -352,15 +474,13 @@ class Orchestrator:
         history = self._get_history(thread_ts)
         active = _active_integrations(self.config)
 
-        notion_context = ""
-        if self.notion:
-            try:
-                notion_context = self.notion.get_context_for_request(text)
-            except Exception:
-                logger.warning("Notion context enrichment failed", exc_info=True)
+        notion_context = self._get_notion_context(text)
 
         crewai_tools = self.tool_registry.get_crewai_tools_for_jibsa()
 
+        thinking_ts = self._post_thinking(channel, thread_ts)
+
+        start = time.monotonic()
         response = self.runner.run_for_jibsa(
             user_message=text,
             tools=crewai_tools,
@@ -368,6 +488,14 @@ class Orchestrator:
             history=history,
             active_integrations=active,
         )
+        latency = time.monotonic() - start
+
+        is_plan = isinstance(response, dict) and response.get("type") == "action_plan"
+        is_error = isinstance(response, str) and response.startswith("⚠️")
+        self.metrics.record_request("jibsa", latency, was_action_plan=is_plan, error=is_error)
+
+        if thinking_ts:
+            self._delete_message(channel, thinking_ts)
 
         self._add_to_history(thread_ts, "user", text)
         self._thread_intern[thread_ts] = None
@@ -518,6 +646,26 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _post_thinking(self, channel: str, thread_ts: str) -> str | None:
+        """Post a 'thinking...' indicator and return its message ts for later deletion."""
+        try:
+            resp = self.slack.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text="\U0001f4ad Thinking...",
+            )
+            return resp.get("ts")
+        except Exception:
+            logger.debug("Could not post thinking indicator")
+            return None
+
+    def _delete_message(self, channel: str, ts: str) -> None:
+        """Delete a message (used to remove thinking indicator)."""
+        try:
+            self.slack.chat_delete(channel=channel, ts=ts)
+        except Exception:
+            logger.debug("Could not delete thinking indicator")
 
     def _post(self, channel: str, thread_ts: str, text: str) -> None:
         try:

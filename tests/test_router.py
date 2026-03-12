@@ -126,6 +126,56 @@ def test_strips_mention_for_jibsa_message(router):
 # update_names
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Team formation
+# ---------------------------------------------------------------------------
+
+def test_form_team_basic():
+    router = MessageRouter(["alex", "sarah"])
+    result = router.route("form team alex, sarah to review the marketing plan")
+    assert result.is_team is True
+    assert set(result.team_names) == {"alex", "sarah"}
+    assert "review" in result.message
+
+
+def test_form_team_with_and():
+    router = MessageRouter(["alex", "bob"])
+    result = router.route("form team alex and bob to do research")
+    assert result.is_team is True
+    assert set(result.team_names) == {"alex", "bob"}
+
+
+def test_form_team_unknown_intern():
+    router = MessageRouter(["alex"])
+    result = router.route("form team alex, unknown to do stuff")
+    assert result.is_team is False  # needs at least 2 known names
+
+
+def test_form_team_needs_two_members():
+    router = MessageRouter(["alex"])
+    result = router.route("form team alex to do stuff")
+    assert result.is_team is False
+
+
+def test_form_team_three_members():
+    router = MessageRouter(["alex", "sarah", "bob"])
+    result = router.route("form team alex, sarah, bob to write a report")
+    assert result.is_team is True
+    assert len(result.team_names) == 3
+    assert "write a report" in result.message
+
+
+def test_form_team_with_mention_prefix():
+    router = MessageRouter(["alex", "sarah"])
+    result = router.route("<@U123ABC> form team alex, sarah to review code")
+    assert result.is_team is True
+    assert set(result.team_names) == {"alex", "sarah"}
+
+
+# ---------------------------------------------------------------------------
+# update_names
+# ---------------------------------------------------------------------------
+
 def test_update_names_adds_new_intern(router):
     result = router.route("sam do something")
     assert result.intern_name is None

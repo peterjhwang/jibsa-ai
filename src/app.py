@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+from .config_schema import validate_config
 from .orchestrator import Orchestrator
 
 load_dotenv()
@@ -32,7 +33,10 @@ _CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 def load_config() -> dict:
     with open(_CONFIG_DIR / "settings.yaml") as f:
-        return yaml.safe_load(f)
+        raw = yaml.safe_load(f)
+    # Validate config on load — raises pydantic.ValidationError on bad input
+    validate_config(raw)
+    return raw
 
 
 def create_app(config: dict) -> tuple[App, Orchestrator]:
@@ -47,12 +51,25 @@ def create_app(config: dict) -> tuple[App, Orchestrator]:
         text = event.get("text", "").strip()
         if not text:
             return
-        orchestrator.handle_message(
-            channel=event.get("channel", ""),
-            thread_ts=event.get("thread_ts") or event["ts"],
-            user=event.get("user", ""),
-            text=text,
-        )
+        channel = event.get("channel", "")
+        thread_ts = event.get("thread_ts") or event["ts"]
+        try:
+            orchestrator.handle_message(
+                channel=channel,
+                thread_ts=thread_ts,
+                user=event.get("user", ""),
+                text=text,
+            )
+        except Exception:
+            logger.error("Unhandled error processing message", exc_info=True)
+            try:
+                slack_app.client.chat_postMessage(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text="⚠️ Something went wrong processing your message. Please try again.",
+                )
+            except Exception:
+                logger.error("Failed to post error message to Slack", exc_info=True)
 
     @slack_app.event("message")
     def handle_message(event):

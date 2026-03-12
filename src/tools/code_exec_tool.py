@@ -3,29 +3,36 @@ CodeExecTool — CrewAI tool for sandboxed Python code execution.
 
 Runs Python code in a subprocess with timeout and safety checks.
 """
+import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Type
+from typing import ClassVar, Type
 
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
-MAX_TIMEOUT = 30
-MAX_OUTPUT_CHARS = 4000
+DEFAULT_TIMEOUT = 30
+DEFAULT_MAX_OUTPUT_CHARS = 4000
 
-BLOCKED_PATTERNS = [
-    ("import os\nos.system", "os.system calls"),
-    ("subprocess.call", "subprocess calls"),
-    ("subprocess.run", "subprocess calls"),
-    ("subprocess.Popen", "subprocess calls"),
-    ("shutil.rmtree", "file deletion"),
-    ("os.remove", "file deletion"),
-    ("os.unlink", "file deletion"),
-    ("__import__('os')", "dynamic os import"),
-    ("eval(", "eval calls"),
-    ("exec(", "exec calls"),
-    ("open(", "file I/O"),
+# Patterns checked via regex for more robust blocking (catches obfuscation attempts)
+BLOCKED_PATTERNS: list[tuple[str, str]] = [
+    (r"\bos\.system\b", "os.system calls"),
+    (r"\bsubprocess\b", "subprocess usage"),
+    (r"\bshutil\.rmtree\b", "file deletion"),
+    (r"\bos\.remove\b", "file deletion"),
+    (r"\bos\.unlink\b", "file deletion"),
+    (r"__import__\s*\(", "dynamic imports"),
+    (r"\beval\s*\(", "eval calls"),
+    (r"\bexec\s*\(", "exec calls"),
+    (r"\bopen\s*\(", "file I/O"),
+    (r"\bimportlib\b", "dynamic imports"),
+    (r"\bgetattr\s*\(\s*__builtins__", "builtins access"),
+    (r"\bos\.environ\b", "environment variable access"),
+    (r"\bsocket\b", "network access"),
+    (r"\burllib\b", "network access"),
+    (r"\brequests\b", "network access"),
+    (r"\bhttpx\b", "network access"),
 ]
 
 
@@ -43,10 +50,24 @@ class CodeExecTool(BaseTool):
     )
     args_schema: Type[BaseModel] = CodeExecInput
 
+    timeout: int = DEFAULT_TIMEOUT
+    max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS
+
+    @classmethod
+    def create(cls, config: dict | None = None) -> "CodeExecTool":
+        """Create with optional config overrides."""
+        if not config:
+            return cls()
+        jibsa_cfg = config.get("jibsa", {})
+        return cls(
+            timeout=jibsa_cfg.get("code_exec_timeout", DEFAULT_TIMEOUT),
+            max_output_chars=jibsa_cfg.get("code_exec_max_output", DEFAULT_MAX_OUTPUT_CHARS),
+        )
+
     def _run(self, code: str) -> str:
-        # Safety check
+        # Safety check — regex-based for robustness
         for pattern, reason in BLOCKED_PATTERNS:
-            if pattern in code:
+            if re.search(pattern, code):
                 return f"Blocked: {reason} are not allowed for safety."
 
         try:
@@ -58,14 +79,14 @@ class CodeExecTool(BaseTool):
                 ["python3", temp_path],
                 capture_output=True,
                 text=True,
-                timeout=MAX_TIMEOUT,
+                timeout=self.timeout,
                 cwd=tempfile.gettempdir(),
             )
 
             Path(temp_path).unlink(missing_ok=True)
 
-            stdout = result.stdout[:MAX_OUTPUT_CHARS] if result.stdout else ""
-            stderr = result.stderr[:MAX_OUTPUT_CHARS] if result.stderr else ""
+            stdout = result.stdout[:self.max_output_chars] if result.stdout else ""
+            stderr = result.stderr[:self.max_output_chars] if result.stderr else ""
 
             if result.returncode != 0:
                 return f"Error (exit {result.returncode}):\n{stderr}"
@@ -77,6 +98,6 @@ class CodeExecTool(BaseTool):
 
         except subprocess.TimeoutExpired:
             Path(temp_path).unlink(missing_ok=True)
-            return f"Code timed out after {MAX_TIMEOUT} seconds."
+            return f"Code timed out after {self.timeout} seconds."
         except Exception as e:
             return f"Execution error: {e}"

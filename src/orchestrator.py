@@ -10,6 +10,8 @@ v0.6: Full CrewAI integration — each intern is a CrewAI Agent with
 native tool use, memory, and multi-provider LLM support.
 """
 import logging
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -84,8 +86,8 @@ class Orchestrator:
         # Web search tool (always available)
         self.tool_registry.register_crewai_tool("web_search", WebSearchTool())
 
-        # Code execution tool (always available)
-        self.tool_registry.register_crewai_tool("code_exec", CodeExecTool())
+        # Code execution tool (always available, config-driven limits)
+        self.tool_registry.register_crewai_tool("code_exec", CodeExecTool.create(self.config))
 
         # Slack tool (write tool — proposes action plans)
         self.tool_registry.register_crewai_tool("slack", SlackTool())
@@ -105,6 +107,24 @@ class Orchestrator:
         text: str,
     ) -> None:
         """Process an incoming Slack message."""
+        request_id = uuid.uuid4().hex[:8]
+        start_time = time.monotonic()
+        logger.info("[%s] message from %s in %s: %.80s", request_id, user, thread_ts, text)
+
+        try:
+            self._dispatch(channel, thread_ts, user, text)
+        finally:
+            elapsed = time.monotonic() - start_time
+            logger.info("[%s] completed in %.1fs", request_id, elapsed)
+
+    def _dispatch(
+        self,
+        channel: str,
+        thread_ts: str,
+        user: str,
+        text: str,
+    ) -> None:
+        """Internal dispatch — separated for tracing wrapper."""
         # Priority 1: Active hire flow session
         if self.hire_flow.has_session(thread_ts):
             response = self.hire_flow.handle(thread_ts, user, text)

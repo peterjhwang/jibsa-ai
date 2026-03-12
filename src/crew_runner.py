@@ -12,6 +12,7 @@ Supports multiple LLM providers via CrewAI's native integration:
 import json
 import logging
 import re
+import signal
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,9 @@ class CrewRunner:
         self._llm_string = _build_llm_string(config)
         self._temperature = config.get("llm", {}).get("temperature", 0.7)
         self._max_tokens = config.get("llm", {}).get("max_tokens", 4096)
+        jibsa_cfg = config.get("jibsa", {})
+        self._max_iter: int = jibsa_cfg.get("crew_max_iter", 10)
+        self._crew_timeout: int = jibsa_cfg.get("crew_timeout", 300)
 
     def run_for_jibsa(
         self,
@@ -117,7 +121,7 @@ class CrewRunner:
             llm=self._llm_string,
             verbose=False,
             memory=True,
-            max_iter=10,
+            max_iter=self._max_iter,
         )
 
         return self._run_crew(agent, user_message)
@@ -173,7 +177,7 @@ class CrewRunner:
             llm=self._llm_string,
             verbose=False,
             memory=True,
-            max_iter=10,
+            max_iter=self._max_iter,
         )
 
         return self._run_crew(agent, user_message)
@@ -259,8 +263,11 @@ class CrewRunner:
         )
 
         try:
-            result = crew.kickoff()
+            result = self._run_with_timeout(crew)
             output = str(result.raw) if hasattr(result, "raw") else str(result)
+        except TimeoutError:
+            logger.error("Crew execution timed out after %ds", self._crew_timeout)
+            return f"⚠️ Request timed out after {self._crew_timeout}s. Try a simpler request."
         except Exception as e:
             logger.error("Crew execution failed: %s", e)
             return f"⚠️ CrewAI execution failed: {e}"
@@ -271,6 +278,19 @@ class CrewRunner:
             return parsed
 
         return output
+
+    def _run_with_timeout(self, crew: Crew):
+        """Run crew.kickoff() with a SIGALRM timeout (Unix only)."""
+        def _timeout_handler(signum, frame):
+            raise TimeoutError(f"Crew execution exceeded {self._crew_timeout}s")
+
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(self._crew_timeout)
+        try:
+            return crew.kickoff()
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
 
     @staticmethod
     def _format_history(history: list[dict] | None) -> str:

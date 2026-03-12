@@ -25,6 +25,14 @@ jibsa:
   # Maximum concurrent Claude subprocess calls
   claude_max_concurrent: 3
 
+  # CrewAI execution limits
+  crew_timeout: 300       # Max seconds for a single crew execution
+  crew_max_iter: 10       # Max reasoning iterations per crew
+
+  # Code execution sandbox limits
+  code_exec_timeout: 30   # Seconds before code exec is killed
+  code_exec_max_output: 4000  # Max chars of stdout/stderr captured
+
 scheduler:
   morning_briefing:
     enabled: false      # Enable in Phase 3
@@ -40,7 +48,7 @@ scheduler:
     cron: "0 16 * * 5"   # Friday 4 PM
 
 approval:
-  # Keywords that trigger plan execution
+  # Keywords that trigger plan execution (word-boundary matched)
   approve_keywords:
     - "✅"
     - "yes"
@@ -49,7 +57,7 @@ approval:
     - "go ahead"
     - "do it"
     - "proceed"
-  # Keywords that cancel and request revision
+  # Keywords that cancel and request revision (word-boundary matched)
   reject_keywords:
     - "❌"
     - "no"
@@ -57,6 +65,8 @@ approval:
     - "stop"
     - "revise"
     - "change"
+  # Pending plans expire after this many seconds (default: 1 hour)
+  ttl_seconds: 3600
 
 # Integrations — set enabled: true as each phase is deployed
 integrations:

@@ -292,7 +292,7 @@ class TestImageGenTool:
     def test_returns_not_configured_without_api_key(self):
         from src.tools.image_gen_tool import ImageGenTool
         env = os.environ.copy()
-        env.pop("OPENAI_API_KEY", None)
+        env.pop("GOOGLE_API_KEY", None)
         with patch.dict(os.environ, env, clear=True):
             tool = ImageGenTool()
             result = tool._run(prompt="a cat in space")
@@ -300,26 +300,26 @@ class TestImageGenTool:
 
     def test_returns_action_plan_instructions(self):
         from src.tools.image_gen_tool import ImageGenTool
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}):
             tool = ImageGenTool()
             result = tool._run(prompt="a sunset over mountains")
             assert "action_plan" in result
             assert "image_gen" in result
             assert "generate_image" in result
 
-    def test_rejects_invalid_size(self):
+    def test_rejects_invalid_aspect_ratio(self):
         from src.tools.image_gen_tool import ImageGenTool
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}):
             tool = ImageGenTool()
-            result = tool._run(prompt="a cat", size="500x500")
-            assert "Invalid size" in result
+            result = tool._run(prompt="a cat", aspect_ratio="500x500")
+            assert "Invalid aspect ratio" in result
 
-    def test_valid_sizes_accepted(self):
+    def test_valid_aspect_ratios_accepted(self):
         from src.tools.image_gen_tool import ImageGenTool
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}):
             tool = ImageGenTool()
-            for size in ["1024x1024", "1024x1792", "1792x1024"]:
-                result = tool._run(prompt="test", size=size)
+            for ratio in ["1:1", "9:16", "16:9", "3:2"]:
+                result = tool._run(prompt="test", aspect_ratio=ratio)
                 assert "action_plan" in result
 
 

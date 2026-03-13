@@ -52,9 +52,12 @@ You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
 | `@jibsa hire a marketing intern` | Start conversational hiring flow |
 | `@jibsa alex write 3 blog posts` | Delegate a task to intern Alex |
 | `@jibsa ask mia to research competitors` | Alternative routing syntax |
+| `@jibsa alex, mia research and write a report` | Multi-intern team collaboration |
 | `@jibsa list interns` or `@jibsa team` | Show all active interns |
 | `@jibsa show alex's jd` | View an intern's Job Description |
 | `@jibsa fire alex` | Deactivate an intern |
+| `@jibsa stats` | View usage metrics per intern |
+| `@jibsa reminders` | List pending scheduled reminders |
 
 ### Approval
 
@@ -70,8 +73,18 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 - **Conversational hiring** — describe what you need, Jibsa helps you write a complete Job Description
 - **JD validation** — enforces name, role, responsibilities, tool assignments
 - **Per-intern tools** — each intern only sees their assigned tools
-- **Per-intern memory** — interns remember past interactions (capped at 20 entries)
+- **Channel-scoped memory** — interns remember past interactions, isolated per Slack channel (capped at 20 entries each)
 - **Smart routing** — `@jibsa alex do X`, `@jibsa ask alex to X`, name prefix, etc.
+- **Team collaboration** — `@jibsa alex, mia do X` spins up a multi-agent CrewAI crew
+
+### Reliability & Observability
+- **Config validation** — Pydantic-validated `settings.yaml` catches typos at startup
+- **Circuit breaker** — Notion API calls use a three-state circuit breaker (CLOSED → OPEN → HALF_OPEN) to prevent cascading failures
+- **Request tracing** — every request gets a UUID, latency is logged
+- **Usage metrics** — `@jibsa stats` shows per-intern request counts, latencies, approval rates, and errors
+- **Thinking indicator** — posts a "Thinking..." message while CrewAI reasons, then removes it
+- **Approval TTL** — pending plans auto-expire after a configurable timeout (default 1 hour)
+- **Crew timeout** — configurable `SIGALRM`-based timeout for CrewAI executions (default 5 min)
 
 ### Tools
 
@@ -79,7 +92,11 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 |------|------|-------------|
 | **Notion** | Read + Write | Query and manage tasks, projects, notes, journals, expenses, workouts (26 databases) |
 | **Web Search** | Read-only | DuckDuckGo search — no API key required |
+| **Web Reader** | Read-only | Fetch and read full web pages via [ZenRows](https://www.zenrows.com) (JS rendering, anti-bot) |
 | **Code Exec** | Read-only | Sandboxed Python execution for calculations and data processing |
+| **File Generator** | Write (approval) | Generate CSV, JSON, Markdown, or text files and upload to Slack |
+| **Image Generator** | Write (approval) | Generate AI images via Nano Banana 2 (Gemini) and upload to Slack |
+| **Reminder** | Write (approval) | Schedule timed reminders via APScheduler — posts to Slack at the specified time |
 | **Slack** | Write (approval) | Post messages to Slack channels |
 | **Calendar** | Read-only (stub) | Google Calendar integration — coming in Phase 3 |
 
@@ -90,6 +107,9 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 | **Slack** — Socket Mode bot, threaded conversations, Block Kit buttons | ✅ Live |
 | **Notion** — Schema-free PARA Second Brain (26 databases) | ✅ Live |
 | **CrewAI** — Multi-provider LLM orchestration (Claude, GPT-4, Gemini) | ✅ Live |
+| **ZenRows** — Web page fetching with JS rendering and anti-bot bypass | ✅ Live |
+| **Nano Banana 2** — AI image generation via Google Gemini | ✅ Live |
+| **APScheduler** — Background scheduler for timed reminders | ✅ Live |
 | **Jira** — Ticket sync, morning briefing, overdue alerts | 🔜 Phase 3 |
 | **Google Calendar** — Event management, scheduled reminders | 🔜 Phase 3 |
 | **Gmail** — Email triage, weekly digest | 🔜 Phase 4 |
@@ -197,17 +217,25 @@ jibsa-ai/
 │   ├── app.py                  # Slack Bolt entry point (Socket Mode + Block Kit actions)
 │   ├── orchestrator.py         # Central router: messages → interns → CrewAI → approval
 │   ├── crew_runner.py          # CrewAI Agent/Task/Crew builder (primary engine)
-│   ├── router.py               # Message parsing and intern name routing
+│   ├── router.py               # Message parsing, intern routing, team detection
 │   ├── hire_flow.py            # Conversational JD creation flow
 │   ├── intern_registry.py      # CRUD for interns (Notion-backed, cached)
 │   ├── tool_registry.py        # Tool catalog + per-intern permission checking
-│   ├── approval.py             # ApprovalState machine per Slack thread
+│   ├── approval.py             # ApprovalState machine per Slack thread (with TTL)
+│   ├── config_schema.py        # Pydantic validation for settings.yaml
+│   ├── circuit_breaker.py      # Three-state circuit breaker for API resilience
+│   ├── metrics.py              # In-memory request tracking and stats
+│   ├── scheduler.py            # APScheduler wrapper for timed reminders
 │   ├── models/
-│   │   └── intern.py           # InternJD dataclass (validation, memory, formatting)
+│   │   └── intern.py           # InternJD dataclass (validation, channel-scoped memory)
 │   ├── tools/
 │   │   ├── notion_read_tool.py # CrewAI BaseTool: Notion queries
 │   │   ├── web_search_tool.py  # CrewAI BaseTool: DuckDuckGo search
+│   │   ├── web_reader_tool.py  # CrewAI BaseTool: ZenRows page fetcher
 │   │   ├── code_exec_tool.py   # CrewAI BaseTool: sandboxed Python
+│   │   ├── file_gen_tool.py    # CrewAI BaseTool: CSV/JSON/MD/TXT generator
+│   │   ├── image_gen_tool.py   # CrewAI BaseTool: DALL-E 3 image generation
+│   │   ├── reminder_tool.py    # CrewAI BaseTool: scheduled reminders
 │   │   ├── slack_tool.py       # CrewAI BaseTool: Slack post (write, needs approval)
 │   │   └── calendar_tool.py    # CrewAI BaseTool: Calendar stub (Phase 3)
 │   └── integrations/
@@ -223,7 +251,7 @@ jibsa-ai/
 │       ├── intern.txt          # Intern system prompt template
 │       └── hire.txt            # Hire flow prompt
 │
-├── tests/                      # pytest test suite (181 passing)
+├── tests/                      # pytest test suite (263 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
 ├── Dockerfile
@@ -252,10 +280,10 @@ graph TD
 
     CrewRunner -->|"Agent + Task + Crew"| CrewAI["CrewAI\n(Claude / GPT-4 / Gemini)"]
 
-    CrewAI -->|tool call| Tools["Tools\nNotion · Web Search\nCode Exec · Slack"]
+    CrewAI -->|tool call| Tools["Tools\nNotion · Web Search · Web Reader\nCode Exec · File Gen · Image Gen"]
     CrewAI -->|action plan| Approval["approval.py\nBlock Kit ✅ / ❌"]
 
-    Approval -->|approved| Execute["Execute Plan\nNotion writes · Slack posts"]
+    Approval -->|approved| Execute["Execute Plan\nNotion writes · Slack posts\nFile uploads · Image gen · Reminders"]
     Approval -->|rejected| User
 
     Tools -->|read results| CrewAI
@@ -272,8 +300,10 @@ graph TD
 | Orchestration | CrewAI | Native multi-provider LLM, Agent/Task/Crew model, built-in tool use |
 | LLM support | Multi-provider | `anthropic/claude`, `openai/gpt-4o`, `google/gemini` via CrewAI |
 | Slack transport | Socket Mode | No public URL or reverse proxy needed |
-| Approval gate | Block Kit buttons + text | Interactive ✅/❌ buttons with text fallback |
+| Approval gate | Block Kit buttons + text | Interactive ✅/❌ buttons with text fallback, auto-expiring TTL |
 | Tool isolation | Per-intern filtering | Each intern only accesses tools listed in their JD |
+| Config validation | Pydantic | Catches typos and invalid values at startup, not runtime |
+| API resilience | Circuit breaker | Prevents cascading failures from flaky external APIs |
 | Notion reads | Page flattening | Any page → flat key-value JSON, passed raw to LLM |
 | Notion writes | Runtime schema discovery | Auto-detect property types, no hardcoded schemas |
 | Intern storage | Notion database | JDs stored in Notion Interns DB with caching |
@@ -294,7 +324,7 @@ graph TD
 .venv/bin/python -m pytest tests/ --cov=src --cov-report=term-missing
 ```
 
-181 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 5 tools, orchestrator, Notion second brain.
+263 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 9 tools, orchestrator, Notion second brain, circuit breaker, metrics, scheduler.
 
 ---
 
@@ -305,6 +335,8 @@ graph TD
 - A [Slack app](https://api.slack.com/apps) with Socket Mode + Interactivity enabled
 - LLM API key (Anthropic, OpenAI, or Google — depending on `settings.yaml` config)
 - Notion integration token (for Second Brain + intern storage)
+- **Optional:** `ZENROWS_API_KEY` for the Web Reader tool
+- **Optional:** `GOOGLE_API_KEY` for Nano Banana 2 image generation (also used if your LLM provider is Google)
 
 ---
 
@@ -315,8 +347,10 @@ graph TD
 | **1** | Core loop: Slack bot + Claude + propose-approve flow | ✅ Done |
 | **2** | Notion Second Brain (PARA: 26 databases, schema-free) | ✅ Done |
 | **2.5** | Multi-intern platform: CrewAI, hiring flow, 5 tools, Block Kit | ✅ Done |
+| **2.6** | Reliability (config validation, circuit breaker, metrics, approval TTL) | ✅ Done |
+| **2.7** | New tools: Web Reader, File Gen, Image Gen, Reminders + team collaboration | ✅ Done |
 | **3** | Jira + Google Calendar + scheduled jobs (morning briefing, EOD review) | 🔜 |
-| **4** | Gmail + weekly digest + team interactions | 🔜 |
+| **4** | Gmail + weekly digest | 🔜 |
 | **5** | Setup wizard, audit logging, open-source polish | 🔜 |
 
 ## License

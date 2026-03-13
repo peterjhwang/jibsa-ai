@@ -7,3 +7,4 @@ crewai>=1.10.0
 duckduckgo-search>=8.0.0
 zenrows>=1.4.0
 apscheduler>=3.11.0
+google-genai>=1.52.0

@@ -712,16 +712,16 @@ class Orchestrator:
 
         params = step.get("params", {})
         prompt = params.get("prompt", "")
-        size = params.get("size", "1024x1024")
+        aspect_ratio = params.get("aspect_ratio", "1:1")
         filename = params.get("filename", "generated_image.png")
 
         if not prompt:
             return {"ok": False, "error": "Missing image prompt"}
-        if not os.environ.get("OPENAI_API_KEY"):
-            return {"ok": False, "error": "OPENAI_API_KEY is not set"}
+        if not os.environ.get("GOOGLE_API_KEY"):
+            return {"ok": False, "error": "GOOGLE_API_KEY is not set"}
 
         try:
-            file_path = generate_and_save(prompt, size, filename)
+            file_path = generate_and_save(prompt, aspect_ratio, filename)
             return {"ok": True, "file_path": file_path, "title": f"Generated: {prompt[:60]}"}
         except Exception as e:
             logger.error("Image generation failed: %s", e)

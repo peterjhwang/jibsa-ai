@@ -46,7 +46,7 @@ TOOL_CATALOG: dict[str, dict] = {
         "write_actions": ["upload_file"],
     },
     "image_gen": {
-        "description": "Generate AI images using DALL-E (requires approval)",
+        "description": "Generate AI images using Nano Banana 2 (requires approval)",
         "write_actions": ["generate_image"],
     },
     "reminder": {

@@ -83,10 +83,18 @@ class MessageRouter:
                 )
 
         # Management commands are passed through to orchestrator (not routed to interns)
-        if cleaned_lower in ("list interns", "team", "interns", "show team"):
+        if cleaned_lower in ("list interns", "team", "interns", "show team", "history"):
+            return RouteResult(intern_name=None, message=cleaned)
+
+        # Help command (with optional target: "help", "help alex")
+        if cleaned_lower == "help" or cleaned_lower.startswith("help "):
             return RouteResult(intern_name=None, message=cleaned)
 
         if cleaned_lower.startswith("show ") or cleaned_lower.startswith("fire "):
+            return RouteResult(intern_name=None, message=cleaned)
+
+        # Edit JD: "edit alex's jd", "edit alex"
+        if cleaned_lower.startswith("edit "):
             return RouteResult(intern_name=None, message=cleaned)
 
         # Check "ask {name} to ..." pattern

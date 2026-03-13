@@ -53,10 +53,14 @@ You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
 | `@jibsa alex write 3 blog posts` | Delegate a task to intern Alex |
 | `@jibsa ask mia to research competitors` | Alternative routing syntax |
 | `@jibsa alex, mia research and write a report` | Multi-intern team collaboration |
-| `@jibsa list interns` or `@jibsa team` | Show all active interns |
-| `@jibsa show alex's jd` | View an intern's Job Description |
+| `@jibsa list interns` or `@jibsa team` | Show all active interns (Block Kit cards) |
+| `@jibsa show alex's jd` | View an intern's Job Description (rich Block Kit) |
+| `@jibsa edit alex's jd` | Interactive JD editing session |
 | `@jibsa fire alex` | Deactivate an intern |
-| `@jibsa stats` | View usage metrics per intern |
+| `@jibsa help` | Contextual help with all commands |
+| `@jibsa help alex` | Intern-specific help (role, tools, usage) |
+| `@jibsa stats` | Usage metrics dashboard with recent actions |
+| `@jibsa history` | Approval history (approved/rejected plans) |
 | `@jibsa reminders` | List pending scheduled reminders |
 
 ### Approval
@@ -72,19 +76,29 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 ### Multi-Intern System
 - **Conversational hiring** — describe what you need, Jibsa helps you write a complete Job Description
 - **JD validation** — enforces name, role, responsibilities, tool assignments
+- **Interactive JD editing** — `edit alex's jd` starts a session to modify any field via natural language or direct commands
 - **Per-intern tools** — each intern only sees their assigned tools
 - **Channel-scoped memory** — interns remember past interactions, isolated per Slack channel (capped at 20 entries each)
 - **Smart routing** — `@jibsa alex do X`, `@jibsa ask alex to X`, name prefix, etc.
 - **Team collaboration** — `@jibsa alex, mia do X` spins up a multi-agent CrewAI crew
 
 ### Reliability & Observability
+- **Health check CLI** — `python -m src.doctor` validates config, env vars, Slack/Notion/LLM connectivity, and dependencies
 - **Config validation** — Pydantic-validated `settings.yaml` catches typos at startup
 - **Circuit breaker** — Notion API calls use a three-state circuit breaker (CLOSED → OPEN → HALF_OPEN) to prevent cascading failures
 - **Request tracing** — every request gets a UUID, latency is logged
 - **Usage metrics** — `@jibsa stats` shows per-intern request counts, latencies, approval rates, and errors
+- **Approval history** — `@jibsa history` shows recent approved/rejected plans with timestamps
+- **Scheduled activity digest** — configurable weekly summary posted to your Jibsa channel
 - **Thinking indicator** — posts a "Thinking..." message while CrewAI reasons, then removes it
 - **Approval TTL** — pending plans auto-expire after a configurable timeout (default 1 hour)
 - **Crew timeout** — configurable `SIGALRM`-based timeout for CrewAI executions (default 5 min)
+
+### Rich Slack UI (Block Kit)
+- **Intern cards** — `list interns` shows per-intern cards with tools, responsibilities preview, and "View JD" buttons
+- **JD display** — `show alex's jd` renders structured sections with fields, memory stats, and action hints
+- **Stats dashboard** — `stats` shows metrics with recent actions timeline
+- **Contextual help** — `help` provides grouped command reference; `help alex` shows intern-specific usage
 
 ### Tools
 
@@ -149,11 +163,15 @@ cp .env.example .env
 cp config/notion_databases.yaml.example config/notion_databases.yaml
 # Edit with your Notion database IDs
 
-# 4. Run
+# 4. Verify setup
+python -m src.doctor
+# Checks config, env vars, Slack/Notion/LLM connectivity
+
+# 5. Run
 python -m src.app
 
-# 5. Talk to Jibsa
-# Go to #jibsa in Slack and say: "hire a content marketing intern"
+# 6. Talk to Jibsa
+# Go to #jibsa in Slack and say: "help" or "hire a content marketing intern"
 ```
 
 ### With Docker
@@ -171,6 +189,8 @@ docker-compose up -d
 
 - **[Slack App Setup](docs/slack-setup.md)** — Create and configure the Slack app
 - **[Notion Setup](docs/notion-setup.md)** — Connect your Notion Second Brain
+- **[Feature Roadmap](docs/feature-impact-effort.md)** — Planned features with impact/effort analysis
+- **[Platform Enhancements](docs/feature-platform-enhancements.md)** — JD templates, doctor CLI, multi-model failover
 - **[Contributing](CONTRIBUTING.md)** — Development setup, testing, architecture
 
 ---
@@ -223,6 +243,7 @@ jibsa-ai/
 │   ├── tool_registry.py        # Tool catalog + per-intern permission checking
 │   ├── approval.py             # ApprovalState machine per Slack thread (with TTL)
 │   ├── config_schema.py        # Pydantic validation for settings.yaml
+│   ├── doctor.py               # Health check CLI (python -m src.doctor)
 │   ├── circuit_breaker.py      # Three-state circuit breaker for API resilience
 │   ├── metrics.py              # In-memory request tracking and stats
 │   ├── scheduler.py            # APScheduler wrapper for timed reminders
@@ -234,7 +255,7 @@ jibsa-ai/
 │   │   ├── web_reader_tool.py  # CrewAI BaseTool: ZenRows page fetcher
 │   │   ├── code_exec_tool.py   # CrewAI BaseTool: sandboxed Python
 │   │   ├── file_gen_tool.py    # CrewAI BaseTool: CSV/JSON/MD/TXT generator
-│   │   ├── image_gen_tool.py   # CrewAI BaseTool: DALL-E 3 image generation
+│   │   ├── image_gen_tool.py   # CrewAI BaseTool: Nano Banana 2 image generation
 │   │   ├── reminder_tool.py    # CrewAI BaseTool: scheduled reminders
 │   │   ├── slack_tool.py       # CrewAI BaseTool: Slack post (write, needs approval)
 │   │   └── calendar_tool.py    # CrewAI BaseTool: Calendar stub (Phase 3)
@@ -251,7 +272,7 @@ jibsa-ai/
 │       ├── intern.txt          # Intern system prompt template
 │       └── hire.txt            # Hire flow prompt
 │
-├── tests/                      # pytest test suite (263 passing)
+├── tests/                      # pytest test suite (293 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
 ├── Dockerfile
@@ -324,7 +345,7 @@ graph TD
 .venv/bin/python -m pytest tests/ --cov=src --cov-report=term-missing
 ```
 
-263 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 9 tools, orchestrator, Notion second brain, circuit breaker, metrics, scheduler.
+293 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 9 tools, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breaker, metrics, scheduler, doctor CLI.
 
 ---
 
@@ -349,6 +370,7 @@ graph TD
 | **2.5** | Multi-intern platform: CrewAI, hiring flow, 5 tools, Block Kit | ✅ Done |
 | **2.6** | Reliability (config validation, circuit breaker, metrics, approval TTL) | ✅ Done |
 | **2.7** | New tools: Web Reader, File Gen, Image Gen, Reminders + team collaboration | ✅ Done |
+| **2.8** | UX: help, edit JD, history, Block Kit, doctor CLI, activity digest | ✅ Done |
 | **3** | Jira + Google Calendar + scheduled jobs (morning briefing, EOD review) | 🔜 |
 | **4** | Gmail + weekly digest | 🔜 |
 | **5** | Setup wizard, audit logging, open-source polish | 🔜 |

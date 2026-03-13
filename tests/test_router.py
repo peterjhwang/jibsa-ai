@@ -183,3 +183,45 @@ def test_update_names_adds_new_intern(router):
     router.update_names(["alex", "mia", "dev", "sam"])
     result = router.route("sam do something")
     assert result.intern_name == "sam"
+
+
+# ---------------------------------------------------------------------------
+# Help command
+# ---------------------------------------------------------------------------
+
+def test_help_routes_to_management(router):
+    result = router.route("help")
+    assert result.intern_name is None
+    assert result.message == "help"
+
+
+def test_help_with_target_routes_to_management(router):
+    result = router.route("help alex")
+    assert result.intern_name is None
+    assert result.message == "help alex"
+
+
+# ---------------------------------------------------------------------------
+# Edit command
+# ---------------------------------------------------------------------------
+
+def test_edit_command_routes_to_management(router):
+    result = router.route("edit alex's jd")
+    assert result.intern_name is None
+    assert "edit" in result.message.lower()
+
+
+def test_edit_command_plain_name(router):
+    result = router.route("edit alex")
+    assert result.intern_name is None
+    assert "edit" in result.message.lower()
+
+
+# ---------------------------------------------------------------------------
+# History command
+# ---------------------------------------------------------------------------
+
+def test_history_command_routes_to_management(router):
+    result = router.route("history")
+    assert result.intern_name is None
+    assert result.message == "history"

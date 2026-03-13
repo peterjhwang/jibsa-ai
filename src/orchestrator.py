@@ -44,6 +44,7 @@ _CONFIG_DIR = Path(__file__).parent.parent / "config"
 # Commands handled directly by the orchestrator (not routed to interns/LLM)
 MANAGEMENT_COMMANDS = {
     "list interns", "team", "interns", "show team", "stats", "reminders",
+    "history", "help",
 }
 
 
@@ -139,6 +140,15 @@ class Orchestrator:
         # Circuit breaker for Notion API calls
         self._notion_circuit = CircuitBreaker("notion", failure_threshold=3, recovery_timeout=60)
 
+        # Approval history (completed/rejected plans)
+        self._approval_history: list[dict] = []
+
+        # Edit JD sessions: thread_ts → intern_name being edited
+        self._edit_sessions: dict[str, str] = {}
+
+        # Register activity summary scheduler
+        self._register_activity_summary()
+
     def _register_crewai_tools(self) -> None:
         """Create and register CrewAI tool instances."""
         # Notion read tool (available if Notion is connected)
@@ -171,6 +181,57 @@ class Orchestrator:
         # Web reader tool (read-only — fetches full page content via ZenRows)
         self.tool_registry.register_crewai_tool("web_reader", WebReaderTool())
 
+    def _register_activity_summary(self) -> None:
+        """Register a weekly activity summary job if enabled in config."""
+        sched_cfg = self.config.get("scheduler", {}).get("weekly_digest", {})
+        if not sched_cfg.get("enabled", False):
+            return
+
+        from apscheduler.triggers.cron import CronTrigger
+        cron_str = sched_cfg.get("cron", "0 16 * * 5")  # default: Friday 4pm
+        parts = cron_str.split()
+        if len(parts) >= 5:
+            tz = self.config.get("jibsa", {}).get("timezone", "UTC")
+            trigger = CronTrigger(
+                minute=parts[0], hour=parts[1], day=parts[2],
+                month=parts[3], day_of_week=parts[4], timezone=tz,
+            )
+            self.reminder_scheduler._scheduler.add_job(
+                self._post_activity_summary,
+                trigger=trigger,
+                id="jibsa_weekly_digest",
+                replace_existing=True,
+            )
+            logger.info("Weekly activity summary scheduled: %s", cron_str)
+
+    def _post_activity_summary(self) -> None:
+        """Post an activity summary to the Jibsa channel."""
+        channel = self.config.get("jibsa", {}).get("channel_name", "jibsa")
+
+        stats_text = self.metrics.format_stats()
+        history_summary = self._format_history_summary(limit=10)
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "Weekly Activity Summary"},
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": stats_text},
+            },
+        ]
+
+        if history_summary:
+            blocks.append({"type": "divider"})
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Recent Actions*\n{history_summary}"},
+            })
+
+        text = f"Weekly Activity Summary\n{stats_text}"
+        self._post_blocks(channel, None, blocks, text)
+
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
@@ -201,6 +262,11 @@ class Orchestrator:
         text: str,
     ) -> None:
         """Internal dispatch — separated for tracing wrapper."""
+        # Priority 0.5: Active edit session
+        if thread_ts in self._edit_sessions:
+            self._handle_edit_response(channel, thread_ts, user, text)
+            return
+
         # Priority 1: Active hire flow session
         if self.hire_flow.has_session(thread_ts):
             response = self.hire_flow.handle(thread_ts, user, text)
@@ -224,8 +290,24 @@ class Orchestrator:
                 self._handle_stats(channel, thread_ts)
             elif cmd == "reminders":
                 self._handle_list_reminders(channel, thread_ts)
+            elif cmd == "history":
+                self._handle_history(channel, thread_ts)
+            elif cmd == "help":
+                self._handle_help(channel, thread_ts)
             else:
                 self._handle_list_interns(channel, thread_ts)
+            return
+
+        # Help with target: "help alex"
+        if route.message.lower().startswith("help ") and not route.intern_name:
+            target = route.message[5:].strip()
+            self._handle_help(channel, thread_ts, target=target)
+            return
+
+        # Edit JD: "edit alex's jd" or "edit alex"
+        if route.message.lower().startswith("edit ") and not route.intern_name:
+            intern_name = route.message[5:].strip().rstrip("'s jd").rstrip("'s").strip()
+            self._handle_edit_jd(channel, thread_ts, user, intern_name)
             return
 
         # Show intern JD: "show alex's jd" or "show alex"
@@ -233,7 +315,7 @@ class Orchestrator:
             intern_name = route.message[5:].strip().rstrip("'s jd").rstrip("'s").strip()
             intern = self.intern_registry.get_intern(intern_name)
             if intern:
-                self._post(channel, thread_ts, f"📋 *{intern.name}'s Job Description:*\n\n{intern.format_jd()}")
+                self._show_jd_blocks(channel, thread_ts, intern)
                 return
 
         # Fire intern: "fire alex"
@@ -271,19 +353,52 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _handle_list_interns(self, channel: str, thread_ts: str) -> None:
-        """List all active interns."""
+        """List all active interns with Block Kit cards."""
         interns = self.intern_registry.list_interns(force_refresh=True)
         if not interns:
             self._post(channel, thread_ts,
                        "No interns yet. Say `hire a <role> intern` to create one.")
             return
 
-        lines = ["*Your AI Interns:*\n"]
+        blocks = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "Your AI Interns"},
+            },
+        ]
+
         for i in interns:
-            tools = ", ".join(i.tools_allowed) or "none"
-            lines.append(f"  *{i.name}* — {i.role} (tools: {tools})")
-        lines.append(f"\n_{len(interns)} active intern{'s' if len(interns) != 1 else ''}_")
-        self._post(channel, thread_ts, "\n".join(lines))
+            tools = ", ".join(f"`{t}`" for t in i.tools_allowed) or "_none_"
+            resp_preview = i.responsibilities[0] if i.responsibilities else "No responsibilities set"
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{i.name}* — {i.role}\n{resp_preview}{'...' if len(i.responsibilities) > 1 else ''}",
+                },
+                "accessory": {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "View JD"},
+                    "action_id": f"view_jd_{i.name.lower()}",
+                },
+            })
+            blocks.append({
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"Tools: {tools} · Say `{i.name.lower()} <task>` to assign work"},
+                ],
+            })
+
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": f"_{len(interns)} active intern{'s' if len(interns) != 1 else ''}_ · `hire a <role> intern` to add more"},
+            ],
+        })
+
+        fallback = "\n".join(f"  *{i.name}* — {i.role}" for i in interns)
+        self._post_blocks(channel, thread_ts, blocks, f"Your AI Interns:\n{fallback}")
 
     def _handle_fire_intern(self, channel: str, thread_ts: str, name: str) -> None:
         """Deactivate an intern."""
@@ -295,8 +410,29 @@ class Orchestrator:
             self._post(channel, thread_ts, f"⚠️ {result.get('error', 'Could not fire intern')}")
 
     def _handle_stats(self, channel: str, thread_ts: str) -> None:
-        """Display usage statistics."""
-        self._post(channel, thread_ts, self.metrics.format_stats())
+        """Display usage statistics with Block Kit."""
+        stats_text = self.metrics.format_stats()
+        blocks = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "Jibsa Stats"},
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": stats_text},
+            },
+        ]
+
+        # Add recent history if available
+        history_text = self._format_history_summary(limit=5)
+        if history_text:
+            blocks.append({"type": "divider"})
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Recent Actions*\n{history_text}"},
+            })
+
+        self._post_blocks(channel, thread_ts, blocks, stats_text)
 
     def _handle_list_reminders(self, channel: str, thread_ts: str) -> None:
         """List pending reminders."""
@@ -308,6 +444,419 @@ class Orchestrator:
         for r in reminders:
             lines.append(f"  \u23f0 {r['message'][:60]} \u2014 {r['run_at']}")
         self._post(channel, thread_ts, "\n".join(lines))
+
+    # ------------------------------------------------------------------
+    # Help command
+    # ------------------------------------------------------------------
+
+    def _handle_help(self, channel: str, thread_ts: str, target: str = "") -> None:
+        """Display contextual help. If target is an intern name, show intern-specific help."""
+        if target:
+            intern = self.intern_registry.get_intern(target)
+            if intern:
+                self._handle_help_intern(channel, thread_ts, intern)
+                return
+
+        interns = self.intern_registry.list_interns()
+        intern_list = ", ".join(f"`{i.name.lower()}`" for i in interns) if interns else "_none yet_"
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "Jibsa Help"},
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*Getting Started*\n"
+                        "Jibsa is your AI intern manager. Create interns with specific roles, "
+                        "assign them tasks, and they'll propose actions for your approval."
+                    ),
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*Intern Management*\n"
+                        "`hire a <role> intern` — Create a new intern\n"
+                        "`list interns` — Show all active interns\n"
+                        "`show <name>'s jd` — View an intern's Job Description\n"
+                        "`edit <name>'s jd` — Edit an intern's Job Description\n"
+                        "`fire <name>` — Deactivate an intern"
+                    ),
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*Assigning Tasks*\n"
+                        "`<name> <request>` — Ask a specific intern\n"
+                        "`ask <name> to <request>` — Ask a specific intern\n"
+                        "`form team <name1>, <name2> to <task>` — Multi-intern collaboration\n"
+                        "Or just talk to me directly — I'll handle it as the orchestrator."
+                    ),
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*System Commands*\n"
+                        "`help` — This help message\n"
+                        "`help <name>` — Help for a specific intern\n"
+                        "`stats` — Usage statistics\n"
+                        "`history` — Recent approval history\n"
+                        "`reminders` — Pending reminders"
+                    ),
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*Approvals*\n"
+                        "When an intern proposes an action, approve with ✅ or reject with ❌.\n"
+                        "You can also click the Approve/Reject buttons."
+                    ),
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"Active interns: {intern_list} | Run `jibsa doctor` in CLI to check system health",
+                    },
+                ],
+            },
+        ]
+
+        self._post_blocks(channel, thread_ts, blocks, "Jibsa Help — use `help` for commands")
+
+    def _handle_help_intern(self, channel: str, thread_ts: str, intern: InternJD) -> None:
+        """Show help specific to an intern."""
+        responsibilities = "\n".join(f"  • {r}" for r in intern.responsibilities)
+        tools = ", ".join(f"`{t}`" for t in intern.tools_allowed) or "_none_"
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"Help: {intern.name}"},
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{intern.role}*\n\n{responsibilities}",
+                },
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Tone:* {intern.tone or 'Default'}"},
+                    {"type": "mrkdwn", "text": f"*Tools:* {tools}"},
+                ],
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Autonomy:* {intern.autonomy_rules or 'Always propose before acting'}",
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*How to use {intern.name}:*\n"
+                        f"`{intern.name.lower()} <your request>` — assign a task\n"
+                        f"`ask {intern.name.lower()} to <request>` — same thing\n"
+                        f"`show {intern.name.lower()}'s jd` — view full JD\n"
+                        f"`edit {intern.name.lower()}'s jd` — modify JD"
+                    ),
+                },
+            },
+        ]
+
+        self._post_blocks(channel, thread_ts, blocks, f"Help for {intern.name}")
+
+    # ------------------------------------------------------------------
+    # Edit JD flow
+    # ------------------------------------------------------------------
+
+    def _handle_edit_jd(self, channel: str, thread_ts: str, user: str, intern_name: str) -> None:
+        """Start an edit JD session."""
+        intern = self.intern_registry.get_intern(intern_name)
+        if not intern:
+            self._post(
+                channel, thread_ts,
+                f"No intern named '{intern_name}'. "
+                f"Available: {', '.join(self.intern_registry.get_intern_names()) or 'none'}",
+            )
+            return
+
+        self._edit_sessions[thread_ts] = intern.name.lower()
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Editing {intern.name}'s Job Description*",
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": intern.format_jd()},
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "Tell me what you'd like to change. Examples:\n"
+                        "• _change tone to casual and friendly_\n"
+                        "• _add responsibility: write blog posts_\n"
+                        "• _add tool: web_search_\n"
+                        "• _remove responsibility: update social media_\n"
+                        "• _change role to Senior Content Strategist_\n\n"
+                        "Say `done` or `cancel` when finished."
+                    ),
+                },
+            },
+        ]
+        self._post_blocks(channel, thread_ts, blocks, f"Editing {intern.name}'s JD — tell me what to change.")
+
+    def _handle_edit_response(self, channel: str, thread_ts: str, user: str, text: str) -> None:
+        """Process an edit instruction for an active edit session."""
+        intern_name = self._edit_sessions.get(thread_ts, "")
+        text_lower = text.lower().strip()
+
+        if text_lower in ("done", "cancel", "exit", "quit", "nevermind"):
+            del self._edit_sessions[thread_ts]
+            self._post(channel, thread_ts, "Edit session ended.")
+            return
+
+        intern = self.intern_registry.get_intern(intern_name)
+        if not intern:
+            del self._edit_sessions[thread_ts]
+            self._post(channel, thread_ts, f"Intern '{intern_name}' no longer exists. Edit cancelled.")
+            return
+
+        # Parse edit instructions
+        updates = self._parse_edit_instruction(text, intern)
+        if not updates:
+            # Use CrewAI to interpret natural language edits
+            updates = self._parse_edit_with_llm(text, intern)
+
+        if not updates:
+            self._post(
+                channel, thread_ts,
+                "I couldn't understand that edit. Try being more specific, e.g.:\n"
+                "• `change tone to casual`\n"
+                "• `add responsibility: draft reports`\n"
+                "• `add tool: web_search`\n"
+                "• `remove tool: code_exec`",
+            )
+            return
+
+        # Apply and show result
+        result = self.intern_registry.update_intern(intern_name, updates)
+        if result.get("ok"):
+            # Refresh and show updated JD
+            updated = self.intern_registry.get_intern(intern_name)
+            if updated:
+                self._post(
+                    channel, thread_ts,
+                    f"✅ Updated {updated.name}'s JD:\n\n{updated.format_jd()}\n\n"
+                    f"_Tell me more changes, or say `done` to finish._",
+                )
+            else:
+                self._post(channel, thread_ts, "✅ Updated. Say `done` to finish editing.")
+        else:
+            self._post(channel, thread_ts, f"⚠️ Update failed: {result.get('error', 'unknown')}")
+
+    def _parse_edit_instruction(self, text: str, intern: InternJD) -> dict | None:
+        """Parse simple edit patterns without LLM.
+
+        Returns a dict of updates or None if the pattern isn't recognized.
+        """
+        import re
+        text_stripped = text.strip()
+
+        # "change tone to X" / "set tone to X"
+        m = re.match(r"(?:change|set|update)\s+tone\s+to\s+(.+)", text_stripped, re.IGNORECASE)
+        if m:
+            return {"tone": m.group(1).strip()}
+
+        # "change role to X" / "set role to X"
+        m = re.match(r"(?:change|set|update)\s+role\s+to\s+(.+)", text_stripped, re.IGNORECASE)
+        if m:
+            return {"role": m.group(1).strip()}
+
+        # "change autonomy rules to X"
+        m = re.match(r"(?:change|set|update)\s+autonomy\s*(?:rules?)?\s+to\s+(.+)", text_stripped, re.IGNORECASE)
+        if m:
+            return {"autonomy_rules": m.group(1).strip()}
+
+        # "add responsibility: X"
+        m = re.match(r"add\s+responsibilit(?:y|ies)\s*[:]\s*(.+)", text_stripped, re.IGNORECASE)
+        if m:
+            new_resp = intern.responsibilities + [m.group(1).strip()]
+            return {"responsibilities": new_resp}
+
+        # "remove responsibility: X"
+        m = re.match(r"remove\s+responsibilit(?:y|ies)\s*[:]\s*(.+)", text_stripped, re.IGNORECASE)
+        if m:
+            target = m.group(1).strip().lower()
+            new_resp = [r for r in intern.responsibilities if target not in r.lower()]
+            if len(new_resp) == len(intern.responsibilities):
+                return None  # nothing matched
+            return {"responsibilities": new_resp}
+
+        # "add tool: X"
+        m = re.match(r"add\s+tool\s*[:]\s*(\w+)", text_stripped, re.IGNORECASE)
+        if m:
+            tool = m.group(1).strip().lower()
+            from .models.intern import VALID_TOOL_NAMES
+            if tool not in VALID_TOOL_NAMES:
+                return None
+            if tool not in intern.tools_allowed:
+                return {"tools_allowed": intern.tools_allowed + [tool]}
+            return {}  # already has it
+
+        # "remove tool: X"
+        m = re.match(r"remove\s+tool\s*[:]\s*(\w+)", text_stripped, re.IGNORECASE)
+        if m:
+            tool = m.group(1).strip().lower()
+            new_tools = [t for t in intern.tools_allowed if t.lower() != tool]
+            return {"tools_allowed": new_tools}
+
+        return None
+
+    def _parse_edit_with_llm(self, text: str, intern: InternJD) -> dict | None:
+        """Use CrewAI to interpret natural language edits."""
+        import json
+
+        prompt = (
+            f"You are editing an intern's Job Description. Current JD:\n"
+            f"- Role: {intern.role}\n"
+            f"- Responsibilities: {', '.join(intern.responsibilities)}\n"
+            f"- Tone: {intern.tone}\n"
+            f"- Tools: {', '.join(intern.tools_allowed)}\n"
+            f"- Autonomy rules: {intern.autonomy_rules}\n\n"
+            f"The user wants to make this change: \"{text}\"\n\n"
+            f"Return ONLY a JSON object with the fields to update. "
+            f"Only include fields that should change. Supported fields:\n"
+            f"- role (string)\n"
+            f"- responsibilities (list of strings — full updated list)\n"
+            f"- tone (string)\n"
+            f"- tools_allowed (list of strings)\n"
+            f"- autonomy_rules (string)\n\n"
+            f"Example: {{\"tone\": \"Casual and friendly\", \"responsibilities\": [\"Write blog posts\", \"Draft emails\"]}}\n"
+            f"If the instruction doesn't make sense, return {{}}"
+        )
+
+        try:
+            response = self.runner.run_for_hire(
+                user_message=prompt,
+                available_tools="",
+                history=None,
+            )
+            # Extract JSON from response
+            response_text = str(response).strip()
+            # Try to find JSON in the response
+            import re
+            json_match = re.search(r"\{[^{}]*\}", response_text, re.DOTALL)
+            if json_match:
+                updates = json.loads(json_match.group())
+                # Filter to valid keys
+                valid_keys = {"role", "responsibilities", "tone", "tools_allowed", "autonomy_rules"}
+                updates = {k: v for k, v in updates.items() if k in valid_keys}
+                return updates if updates else None
+        except Exception as e:
+            logger.warning("LLM edit parsing failed: %s", e)
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Approval history
+    # ------------------------------------------------------------------
+
+    def _record_history(self, plan: dict, intern_name: str | None, status: str) -> None:
+        """Record a completed/rejected plan to history."""
+        self._approval_history.append({
+            "summary": plan.get("summary", "Unknown plan"),
+            "intern": intern_name or "jibsa",
+            "steps": len(plan.get("steps", [])),
+            "status": status,
+            "timestamp": time.time(),
+        })
+        # Keep last 50
+        if len(self._approval_history) > 50:
+            self._approval_history = self._approval_history[-50:]
+
+    def _handle_history(self, channel: str, thread_ts: str) -> None:
+        """Display recent approval history."""
+        if not self._approval_history:
+            self._post(channel, thread_ts, "No approval history yet.")
+            return
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "Approval History"},
+            },
+        ]
+
+        from datetime import datetime
+        for entry in reversed(self._approval_history[-10:]):
+            ts = datetime.fromtimestamp(entry["timestamp"]).strftime("%b %d %H:%M")
+            status_icon = "✅" if entry["status"] == "approved" else "❌"
+            intern_display = entry["intern"].capitalize() if entry["intern"] != "jibsa" else "Jibsa"
+
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"{status_icon} *{entry['summary']}*\n{intern_display} · {entry['steps']} step(s) · {ts}",
+                },
+            })
+
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": f"_Showing last {min(10, len(self._approval_history))} of {len(self._approval_history)} total_"},
+            ],
+        })
+
+        self._post_blocks(channel, thread_ts, blocks, "Approval History")
+
+    def _format_history_summary(self, limit: int = 10) -> str:
+        """Format recent history as plain text (for activity summary)."""
+        if not self._approval_history:
+            return ""
+        lines = []
+        for entry in reversed(self._approval_history[-limit:]):
+            from datetime import datetime
+            ts = datetime.fromtimestamp(entry["timestamp"]).strftime("%b %d %H:%M")
+            icon = "✅" if entry["status"] == "approved" else "❌"
+            lines.append(f"{icon} {entry['summary']} ({entry['intern']}, {ts})")
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Hire flow
@@ -528,11 +1077,14 @@ class Orchestrator:
             logger.info("Thread %s — plan approved", thread_ts)
             intern_name = self._thread_intern.get(thread_ts)
             self.metrics.record_approval(intern_name or "jibsa")
+            self._record_history(ctx.pending_plan, intern_name, "approved")
             self._execute_plan(ctx.pending_plan, channel, thread_ts, intern_name)
             self.approval.clear(thread_ts)
 
         elif self.approval.is_rejection(text):
             logger.info("Thread %s — plan rejected", thread_ts)
+            intern_name = self._thread_intern.get(thread_ts)
+            self._record_history(ctx.pending_plan, intern_name, "rejected")
             self._post(channel, thread_ts, "Understood. What would you like to change?")
             self.approval.clear(thread_ts)
 
@@ -752,6 +1304,71 @@ class Orchestrator:
         )
 
     # ------------------------------------------------------------------
+    # Rich Block Kit display
+    # ------------------------------------------------------------------
+
+    def _show_jd_blocks(self, channel: str, thread_ts: str, intern: InternJD) -> None:
+        """Display an intern's JD using Block Kit."""
+        responsibilities = "\n".join(f"  • {r}" for r in intern.responsibilities)
+        tools = ", ".join(f"`{t}`" for t in intern.tools_allowed) or "_none_"
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"{intern.name}'s Job Description"},
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Role:*\n{intern.role}"},
+                    {"type": "mrkdwn", "text": f"*Status:*\n{'Active' if intern.active else 'Inactive'}"},
+                ],
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Responsibilities:*\n{responsibilities}",
+                },
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Tone:*\n{intern.tone or 'Default'}"},
+                    {"type": "mrkdwn", "text": f"*Tools:*\n{tools}"},
+                ],
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Autonomy Rules:*\n{intern.autonomy_rules or 'Always propose before acting'}",
+                },
+            },
+        ]
+
+        # Memory stats
+        mem_count = len(intern.memory)
+        chan_mem = sum(len(v) for v in intern.channel_memory.values())
+        if mem_count or chan_mem:
+            blocks.append({
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"Memory: {mem_count} global, {chan_mem} channel-scoped entries"},
+                ],
+            })
+
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": f"`edit {intern.name.lower()}'s jd` to modify · `fire {intern.name.lower()}` to deactivate"},
+            ],
+        })
+
+        self._post_blocks(channel, thread_ts, blocks, f"{intern.name}'s JD:\n{intern.format_jd()}")
+
+    # ------------------------------------------------------------------
     # Formatting
     # ------------------------------------------------------------------
 
@@ -853,15 +1470,13 @@ class Orchestrator:
         except Exception as e:
             logger.error("Failed to post to Slack: %s", e)
 
-    def _post_blocks(self, channel: str, thread_ts: str, blocks: list[dict], text: str) -> None:
+    def _post_blocks(self, channel: str, thread_ts: str | None, blocks: list[dict], text: str) -> None:
         """Post a Block Kit message with a text fallback."""
         try:
-            self.slack.chat_postMessage(
-                channel=channel,
-                thread_ts=thread_ts,
-                blocks=blocks,
-                text=text,
-            )
+            kwargs = {"channel": channel, "blocks": blocks, "text": text}
+            if thread_ts:
+                kwargs["thread_ts"] = thread_ts
+            self.slack.chat_postMessage(**kwargs)
         except Exception as e:
             logger.error("Failed to post blocks to Slack: %s", e)
             # Fallback to plain text
@@ -882,10 +1497,14 @@ class Orchestrator:
             logger.info("Thread %s — plan approved via button by %s", thread_ts, user)
             respond("✅ Approved! Executing...")
             intern_name = self._thread_intern.get(thread_ts)
+            self.metrics.record_approval(intern_name or "jibsa")
+            self._record_history(ctx.pending_plan, intern_name, "approved")
             self._execute_plan(ctx.pending_plan, channel, thread_ts, intern_name)
             self.approval.clear(thread_ts)
 
         elif action_id == "reject_plan":
             logger.info("Thread %s — plan rejected via button by %s", thread_ts, user)
+            intern_name = self._thread_intern.get(thread_ts)
+            self._record_history(ctx.pending_plan, intern_name, "rejected")
             respond("❌ Rejected. What would you like to change?")
             self.approval.clear(thread_ts)

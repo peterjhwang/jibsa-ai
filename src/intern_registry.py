@@ -107,6 +107,64 @@ class InternRegistry:
             logger.error("Unexpected error creating intern '%s': %s", jd.name, e)
             return {"ok": False, "error": f"Unexpected error: {e}"}
 
+    def update_intern(self, name: str, updates: dict) -> dict:
+        """Update an existing intern's JD fields in Notion.
+
+        Args:
+            name: Intern name (case-insensitive).
+            updates: Dict of field names to new values. Supported keys:
+                     role, responsibilities, tone, tools_allowed, autonomy_rules.
+
+        Returns:
+            {"ok": bool, ...}
+        """
+        intern = self.get_intern(name)
+        if not intern:
+            return {"ok": False, "error": f"No intern named '{name}'"}
+        if not intern.notion_page_id or not self._client:
+            return {"ok": False, "error": "Cannot update intern — no Notion page ID"}
+
+        try:
+            db_id = self._interns_db_id
+            schema = self._brain._get_schema(db_id) if db_id else {}
+
+            props: dict[str, Any] = {}
+
+            if "role" in updates:
+                if prop := self._brain._prop_by_keyword(schema, "role"):
+                    props[prop] = _rich_text_prop(updates["role"])
+            if "responsibilities" in updates:
+                if prop := self._brain._prop_by_keyword(schema, "responsib"):
+                    resp_text = "\n".join(updates["responsibilities"])
+                    props[prop] = _rich_text_prop(resp_text)
+            if "tone" in updates:
+                if prop := self._brain._prop_by_keyword(schema, "tone"):
+                    props[prop] = _rich_text_prop(updates["tone"])
+            if "tools_allowed" in updates:
+                if prop := self._brain._prop_by_keyword(schema, "tool"):
+                    props[prop] = _multi_select_prop(updates["tools_allowed"])
+            if "autonomy_rules" in updates:
+                if prop := self._brain._prop_by_keyword(schema, "autonomy", "rule"):
+                    props[prop] = _rich_text_prop(updates["autonomy_rules"])
+
+            if not props:
+                return {"ok": False, "error": "No updateable fields provided"}
+
+            self._client.update_page(
+                page_id=intern.notion_page_id,
+                properties=props,
+            )
+            self._cache = None
+            logger.info("Updated intern '%s' fields: %s", name, list(updates.keys()))
+            return {"ok": True}
+
+        except NotionAPIError as e:
+            logger.error("Failed to update intern '%s': %s", name, e)
+            return {"ok": False, "error": str(e)}
+        except Exception as e:
+            logger.error("Unexpected error updating intern '%s': %s", name, e)
+            return {"ok": False, "error": f"Unexpected error: {e}"}
+
     def deactivate_intern(self, name: str) -> dict:
         """Set an intern's Active flag to false."""
         intern = self.get_intern(name)

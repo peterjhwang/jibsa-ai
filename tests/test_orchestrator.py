@@ -314,3 +314,248 @@ def test_execute_slack_unknown_action(orchestrator, mock_slack):
     result = orchestrator._execute_slack_step(step)
     assert result["ok"] is False
     assert "Unknown" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Help command
+# ---------------------------------------------------------------------------
+
+def test_help_command_posts_blocks(orchestrator, mock_slack):
+    orchestrator.handle_message("C123", "ts-help", "U001", "help")
+    mock_slack.chat_postMessage.assert_called_once()
+    call_kwargs = mock_slack.chat_postMessage.call_args.kwargs
+    assert "blocks" in call_kwargs
+    # Should contain header block
+    assert any(b.get("type") == "header" for b in call_kwargs["blocks"])
+
+
+def test_help_for_intern(orchestrator, mock_slack):
+    from src.models.intern import InternJD
+    alex = InternJD(
+        name="Alex", role="Dev", responsibilities=["Code"],
+        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
+    )
+    orchestrator.intern_registry._cache = [alex]
+    orchestrator.router.update_names(["alex"])
+
+    orchestrator.handle_message("C123", "ts-help2", "U001", "help alex")
+    call_kwargs = mock_slack.chat_postMessage.call_args.kwargs
+    assert "blocks" in call_kwargs
+    # Should mention Alex in the header
+    header_blocks = [b for b in call_kwargs["blocks"] if b.get("type") == "header"]
+    assert any("Alex" in b["text"]["text"] for b in header_blocks)
+
+
+# ---------------------------------------------------------------------------
+# Edit JD flow
+# ---------------------------------------------------------------------------
+
+def test_edit_starts_session(orchestrator, mock_slack):
+    from src.models.intern import InternJD
+    alex = InternJD(
+        name="Alex", role="Dev", responsibilities=["Code"],
+        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
+    )
+    orchestrator.intern_registry._cache = [alex]
+    orchestrator.router.update_names(["alex"])
+
+    orchestrator.handle_message("C123", "ts-edit", "U001", "edit alex's jd")
+    assert "ts-edit" in orchestrator._edit_sessions
+    assert orchestrator._edit_sessions["ts-edit"] == "alex"
+
+
+def test_edit_unknown_intern(orchestrator, mock_slack):
+    orchestrator.handle_message("C123", "ts-edit2", "U001", "edit nobody's jd")
+    mock_slack.chat_postMessage.assert_called_once()
+    text = mock_slack.chat_postMessage.call_args.kwargs["text"]
+    assert "No intern" in text or "none" in text
+
+
+def test_edit_cancel_ends_session(orchestrator, mock_slack):
+    from src.models.intern import InternJD
+    alex = InternJD(
+        name="Alex", role="Dev", responsibilities=["Code"],
+        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
+    )
+    orchestrator.intern_registry._cache = [alex]
+    orchestrator.router.update_names(["alex"])
+
+    orchestrator.handle_message("C123", "ts-edit3", "U001", "edit alex's jd")
+    assert "ts-edit3" in orchestrator._edit_sessions
+    mock_slack.reset_mock()
+
+    orchestrator.handle_message("C123", "ts-edit3", "U001", "cancel")
+    assert "ts-edit3" not in orchestrator._edit_sessions
+
+
+def test_edit_simple_tone_change(orchestrator, mock_slack):
+    from src.models.intern import InternJD
+    alex = InternJD(
+        name="Alex", role="Dev", responsibilities=["Code"],
+        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
+        notion_page_id="page-123",
+    )
+    orchestrator.intern_registry._cache = [alex]
+    orchestrator.router.update_names(["alex"])
+
+    # Start edit session
+    orchestrator.handle_message("C123", "ts-edit4", "U001", "edit alex's jd")
+    mock_slack.reset_mock()
+
+    # Mock update_intern to succeed
+    mock_update = MagicMock(return_value={"ok": True})
+    with patch.object(orchestrator.intern_registry, "update_intern", mock_update):
+        orchestrator.handle_message("C123", "ts-edit4", "U001", "change tone to casual")
+
+    mock_update.assert_called_once_with("alex", {"tone": "casual"})
+
+
+# ---------------------------------------------------------------------------
+# Parse edit instructions
+# ---------------------------------------------------------------------------
+
+def test_parse_edit_add_responsibility(orchestrator):
+    from src.models.intern import InternJD
+    intern = InternJD(
+        name="Alex", role="Dev", responsibilities=["Write code"],
+        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
+    )
+    updates = orchestrator._parse_edit_instruction("add responsibility: write tests", intern)
+    assert updates is not None
+    assert "responsibilities" in updates
+    assert "write tests" in updates["responsibilities"]
+    assert "Write code" in updates["responsibilities"]
+
+
+def test_parse_edit_remove_responsibility(orchestrator):
+    from src.models.intern import InternJD
+    intern = InternJD(
+        name="Alex", role="Dev", responsibilities=["Write code", "Write tests"],
+        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
+    )
+    updates = orchestrator._parse_edit_instruction("remove responsibility: write tests", intern)
+    assert updates is not None
+    assert len(updates["responsibilities"]) == 1
+    assert "Write code" in updates["responsibilities"]
+
+
+def test_parse_edit_add_tool(orchestrator):
+    from src.models.intern import InternJD
+    intern = InternJD(
+        name="Alex", role="Dev", responsibilities=["Code"],
+        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
+    )
+    updates = orchestrator._parse_edit_instruction("add tool: web_search", intern)
+    assert updates is not None
+    assert "web_search" in updates["tools_allowed"]
+
+
+def test_parse_edit_add_invalid_tool(orchestrator):
+    from src.models.intern import InternJD
+    intern = InternJD(
+        name="Alex", role="Dev", responsibilities=["Code"],
+        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
+    )
+    updates = orchestrator._parse_edit_instruction("add tool: invalid_tool", intern)
+    assert updates is None
+
+
+def test_parse_edit_change_role(orchestrator):
+    from src.models.intern import InternJD
+    intern = InternJD(
+        name="Alex", role="Dev", responsibilities=["Code"],
+        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
+    )
+    updates = orchestrator._parse_edit_instruction("change role to Senior Developer", intern)
+    assert updates == {"role": "Senior Developer"}
+
+
+# ---------------------------------------------------------------------------
+# Approval history
+# ---------------------------------------------------------------------------
+
+def test_history_command_empty(orchestrator, mock_slack):
+    orchestrator.handle_message("C123", "ts-hist", "U001", "history")
+    text = mock_slack.chat_postMessage.call_args.kwargs["text"]
+    assert "No approval history" in text
+
+
+def test_approval_records_history(orchestrator, mock_slack):
+    plan = {"type": "action_plan", "summary": "Test plan", "steps": [], "needs_approval": True}
+    orchestrator.approval.set_pending("ts-hist2", plan, "C123")
+    orchestrator.handle_message("C123", "ts-hist2", "U001", "yes")
+
+    assert len(orchestrator._approval_history) == 1
+    assert orchestrator._approval_history[0]["status"] == "approved"
+    assert orchestrator._approval_history[0]["summary"] == "Test plan"
+
+
+def test_rejection_records_history(orchestrator, mock_slack):
+    plan = {"type": "action_plan", "summary": "Rejected plan", "steps": [], "needs_approval": True}
+    orchestrator.approval.set_pending("ts-hist3", plan, "C123")
+    orchestrator.handle_message("C123", "ts-hist3", "U001", "no")
+
+    assert len(orchestrator._approval_history) == 1
+    assert orchestrator._approval_history[0]["status"] == "rejected"
+
+
+def test_button_approve_records_history(orchestrator, mock_slack):
+    plan = {"type": "action_plan", "summary": "Button plan", "steps": [], "needs_approval": True}
+    orchestrator.approval.set_pending("ts-hist4", plan, "C123")
+    respond = MagicMock()
+    orchestrator.handle_button_action("approve_plan", "C123", "ts-hist4", "U001", respond)
+
+    assert len(orchestrator._approval_history) == 1
+    assert orchestrator._approval_history[0]["status"] == "approved"
+
+
+def test_history_command_shows_entries(orchestrator, mock_slack):
+    orchestrator._record_history(
+        {"summary": "Created task", "steps": [{}]}, "alex", "approved",
+    )
+    orchestrator._record_history(
+        {"summary": "Rejected plan", "steps": [{}, {}]}, "jibsa", "rejected",
+    )
+    orchestrator.handle_message("C123", "ts-hist5", "U001", "history")
+    call_kwargs = mock_slack.chat_postMessage.call_args.kwargs
+    assert "blocks" in call_kwargs
+
+
+# ---------------------------------------------------------------------------
+# Block Kit enhancements
+# ---------------------------------------------------------------------------
+
+def test_list_interns_posts_blocks(orchestrator, mock_slack):
+    from src.models.intern import InternJD
+    alex = InternJD(
+        name="Alex", role="Dev", responsibilities=["Code"],
+        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
+    )
+    # Patch list_interns to return our test data (force_refresh=True bypasses cache)
+    with patch.object(orchestrator.intern_registry, "list_interns", return_value=[alex]):
+        orchestrator.handle_message("C123", "ts-list2", "U001", "list interns")
+    call_kwargs = mock_slack.chat_postMessage.call_args.kwargs
+    assert "blocks" in call_kwargs
+    assert any(b.get("type") == "header" for b in call_kwargs["blocks"])
+
+
+def test_show_jd_posts_blocks(orchestrator, mock_slack):
+    from src.models.intern import InternJD
+    alex = InternJD(
+        name="Alex", role="Dev", responsibilities=["Code"],
+        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
+    )
+    orchestrator.intern_registry._cache = [alex]
+    orchestrator.router.update_names(["alex"])
+
+    orchestrator.handle_message("C123", "ts-show", "U001", "show alex's jd")
+    call_kwargs = mock_slack.chat_postMessage.call_args.kwargs
+    assert "blocks" in call_kwargs
+    header_blocks = [b for b in call_kwargs["blocks"] if b.get("type") == "header"]
+    assert any("Alex" in b["text"]["text"] for b in header_blocks)
+
+
+def test_stats_posts_blocks(orchestrator, mock_slack):
+    orchestrator.handle_message("C123", "ts-stats2", "U001", "stats")
+    call_kwargs = mock_slack.chat_postMessage.call_args.kwargs
+    assert "blocks" in call_kwargs

@@ -10,6 +10,7 @@ v0.6: Full CrewAI integration — each intern is a CrewAI Agent with
 native tool use, memory, and multi-provider LLM support.
 """
 import logging
+import os
 import time
 import uuid
 from pathlib import Path
@@ -30,6 +31,11 @@ from .tools.web_search_tool import WebSearchTool
 from .tools.code_exec_tool import CodeExecTool
 from .tools.slack_tool import SlackTool
 from .tools.calendar_tool import CalendarTool
+from .tools.file_gen_tool import FileGenTool
+from .tools.image_gen_tool import ImageGenTool
+from .tools.reminder_tool import ReminderTool
+from .tools.web_reader_tool import WebReaderTool
+from .scheduler import ReminderScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +43,7 @@ _CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 # Commands handled directly by the orchestrator (not routed to interns/LLM)
 MANAGEMENT_COMMANDS = {
-    "list interns", "team", "interns", "show team", "stats",
+    "list interns", "team", "interns", "show team", "stats", "reminders",
 }
 
 
@@ -50,12 +56,62 @@ def _active_integrations(config: dict) -> list[str]:
     ]
 
 
+def _parse_reminder_time(when: str, timezone: str = "UTC"):
+    """Parse a time string into a datetime. Supports ISO 8601 and relative times."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    import re
+
+    tz = ZoneInfo(timezone)
+    now = datetime.now(tz)
+
+    # Try ISO 8601 first
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt = datetime.strptime(when.strip(), fmt)
+            return dt.replace(tzinfo=tz)
+        except ValueError:
+            continue
+
+    # Try relative: "in X minutes/hours/days"
+    match = re.match(r"in\s+(\d+)\s+(minute|min|hour|hr|day)s?", when.strip(), re.IGNORECASE)
+    if match:
+        amount = int(match.group(1))
+        unit = match.group(2).lower()
+        if unit in ("minute", "min"):
+            return now + timedelta(minutes=amount)
+        elif unit in ("hour", "hr"):
+            return now + timedelta(hours=amount)
+        elif unit == "day":
+            return now + timedelta(days=amount)
+
+    # Try "tomorrow at HH:MM"
+    match = re.match(r"tomorrow\s+(?:at\s+)?(\d{1,2}):?(\d{2})?\s*(am|pm)?", when.strip(), re.IGNORECASE)
+    if match:
+        hour = int(match.group(1))
+        minute = int(match.group(2) or 0)
+        ampm = match.group(3)
+        if ampm and ampm.lower() == "pm" and hour < 12:
+            hour += 12
+        elif ampm and ampm.lower() == "am" and hour == 12:
+            hour = 0
+        tomorrow = now + timedelta(days=1)
+        return tomorrow.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+    return None
+
+
 class Orchestrator:
     def __init__(self, slack_client: Any, config: dict):
         self.slack = slack_client
         self.config = config
         self.notion = build_second_brain(config)
         self.approval = ApprovalManager(config)
+
+        # Reminder scheduler
+        tz = config.get("jibsa", {}).get("timezone", "UTC")
+        self.reminder_scheduler = ReminderScheduler(slack_client, timezone=tz)
+        self.reminder_scheduler.start()
 
         # CrewAI runner
         self.runner = CrewRunner(config)
@@ -102,6 +158,18 @@ class Orchestrator:
 
         # Calendar tool (read-only stub for Phase 3)
         self.tool_registry.register_crewai_tool("calendar", CalendarTool())
+
+        # File generation tool (write tool — proposes action plans)
+        self.tool_registry.register_crewai_tool("file_gen", FileGenTool())
+
+        # Image generation tool (write tool — proposes action plans)
+        self.tool_registry.register_crewai_tool("image_gen", ImageGenTool())
+
+        # Reminder tool (write tool — proposes action plans)
+        self.tool_registry.register_crewai_tool("reminder", ReminderTool())
+
+        # Web reader tool (read-only — fetches full page content via ZenRows)
+        self.tool_registry.register_crewai_tool("web_reader", WebReaderTool())
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -154,6 +222,8 @@ class Orchestrator:
         if cmd in MANAGEMENT_COMMANDS:
             if cmd == "stats":
                 self._handle_stats(channel, thread_ts)
+            elif cmd == "reminders":
+                self._handle_list_reminders(channel, thread_ts)
             else:
                 self._handle_list_interns(channel, thread_ts)
             return
@@ -227,6 +297,17 @@ class Orchestrator:
     def _handle_stats(self, channel: str, thread_ts: str) -> None:
         """Display usage statistics."""
         self._post(channel, thread_ts, self.metrics.format_stats())
+
+    def _handle_list_reminders(self, channel: str, thread_ts: str) -> None:
+        """List pending reminders."""
+        reminders = self.reminder_scheduler.list_reminders()
+        if not reminders:
+            self._post(channel, thread_ts, "No pending reminders.")
+            return
+        lines = ["*Pending Reminders:*\n"]
+        for r in reminders:
+            lines.append(f"  \u23f0 {r['message'][:60]} \u2014 {r['run_at']}")
+        self._post(channel, thread_ts, "\n".join(lines))
 
     # ------------------------------------------------------------------
     # Hire flow
@@ -532,6 +613,12 @@ class Orchestrator:
                 result = self.notion.execute_step(step)
             elif service == "slack":
                 result = self._execute_slack_step(step)
+            elif service == "file_gen":
+                result = self._execute_file_gen_step(step)
+            elif service == "image_gen":
+                result = self._execute_image_gen_step(step)
+            elif service == "reminder":
+                result = self._execute_reminder_step(step, channel, thread_ts)
             else:
                 result = {"ok": False, "error": f"'{service}' not connected yet"}
             results.append((step, result))
@@ -552,6 +639,23 @@ class Orchestrator:
             prefix = f"*[{intern.name} — {intern.role}]*\n"
 
         self._post(channel, thread_ts, f"{prefix}{chr(10).join(lines)}")
+
+        # Upload any generated files
+        for step, result in results:
+            if result.get("ok") and result.get("file_path"):
+                try:
+                    self.slack.files_upload_v2(
+                        channel=channel,
+                        thread_ts=thread_ts,
+                        file=result["file_path"],
+                        title=result.get("title", "Generated file"),
+                    )
+                except Exception as e:
+                    logger.error("Failed to upload file: %s", e)
+                    self._post(channel, thread_ts, f"⚠️ File upload failed: {e}")
+                finally:
+                    # Clean up temp file
+                    Path(result["file_path"]).unlink(missing_ok=True)
 
     # ------------------------------------------------------------------
     # Slack execution
@@ -574,6 +678,78 @@ class Orchestrator:
                 return {"ok": False, "error": str(e)}
 
         return {"ok": False, "error": f"Unknown slack action: {action}"}
+
+    # ------------------------------------------------------------------
+    # File generation execution
+    # ------------------------------------------------------------------
+
+    def _execute_file_gen_step(self, step: dict) -> dict:
+        """Execute a file generation step — create file and upload to Slack."""
+        from .tools.file_gen_tool import create_and_get_path
+
+        params = step.get("params", {})
+        filename = params.get("filename", "")
+        content = params.get("content", "")
+        title = params.get("title", filename)
+
+        if not filename or not content:
+            return {"ok": False, "error": "Missing filename or content"}
+
+        try:
+            file_path = create_and_get_path(filename, content)
+            # We'll store the path — the orchestrator will upload after all steps
+            return {"ok": True, "file_path": file_path, "title": title}
+        except Exception as e:
+            return {"ok": False, "error": f"File creation failed: {e}"}
+
+    # ------------------------------------------------------------------
+    # Image generation execution
+    # ------------------------------------------------------------------
+
+    def _execute_image_gen_step(self, step: dict) -> dict:
+        """Execute an image generation step — generate and save image."""
+        from .tools.image_gen_tool import generate_and_save
+
+        params = step.get("params", {})
+        prompt = params.get("prompt", "")
+        size = params.get("size", "1024x1024")
+        filename = params.get("filename", "generated_image.png")
+
+        if not prompt:
+            return {"ok": False, "error": "Missing image prompt"}
+        if not os.environ.get("OPENAI_API_KEY"):
+            return {"ok": False, "error": "OPENAI_API_KEY is not set"}
+
+        try:
+            file_path = generate_and_save(prompt, size, filename)
+            return {"ok": True, "file_path": file_path, "title": f"Generated: {prompt[:60]}"}
+        except Exception as e:
+            logger.error("Image generation failed: %s", e)
+            return {"ok": False, "error": f"Image generation failed: {e}"}
+
+    # ------------------------------------------------------------------
+    # Reminder execution
+    # ------------------------------------------------------------------
+
+    def _execute_reminder_step(self, step: dict, channel: str, thread_ts: str) -> dict:
+        """Schedule a reminder."""
+        params = step.get("params", {})
+        message = params.get("message", "")
+        when = params.get("when", "")
+
+        if not message or not when:
+            return {"ok": False, "error": "Missing message or when"}
+
+        run_at = _parse_reminder_time(when, self.config.get("jibsa", {}).get("timezone", "UTC"))
+        if not run_at:
+            return {"ok": False, "error": f"Could not parse time: '{when}'"}
+
+        return self.reminder_scheduler.add_reminder(
+            channel=channel,
+            thread_ts=thread_ts,
+            message=message,
+            run_at=run_at,
+        )
 
     # ------------------------------------------------------------------
     # Formatting

@@ -1,4 +1,6 @@
-"""Tests for CrewAI custom tools — Notion read, web search, code exec, slack, calendar."""
+"""Tests for CrewAI custom tools — Notion read, web search, code exec, slack, calendar, web reader, file gen."""
+import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -159,3 +161,177 @@ class TestCalendarTool:
         tool = CalendarTool()
         result = tool._run(query="what's on my calendar")
         assert "event" in result.lower() or "meeting" in result.lower() or "schedule" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# WebReaderTool
+# ---------------------------------------------------------------------------
+
+class TestWebReaderTool:
+    def test_returns_not_configured_without_api_key(self):
+        from src.tools.web_reader_tool import WebReaderTool
+        with patch.dict(os.environ, {}, clear=False):
+            # Ensure ZENROWS_API_KEY is not set
+            env = os.environ.copy()
+            env.pop("ZENROWS_API_KEY", None)
+            with patch.dict(os.environ, env, clear=True):
+                tool = WebReaderTool()
+                result = tool._run("https://example.com")
+                assert "not configured" in result.lower()
+
+    @patch("src.tools.web_reader_tool.ZenRowsClient", create=True)
+    def test_returns_content_on_success(self, MockClient):
+        from src.tools.web_reader_tool import WebReaderTool
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "<html><body><p>Hello World</p></body></html>"
+        MockClient.return_value.get.return_value = mock_response
+
+        with patch.dict(os.environ, {"ZENROWS_API_KEY": "test-key"}):
+            tool = WebReaderTool()
+            result = tool._run("https://example.com")
+            assert "Hello World" in result
+
+    @patch("src.tools.web_reader_tool.ZenRowsClient", create=True)
+    def test_returns_error_on_http_failure(self, MockClient):
+        from src.tools.web_reader_tool import WebReaderTool
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        MockClient.return_value.get.return_value = mock_response
+
+        with patch.dict(os.environ, {"ZENROWS_API_KEY": "test-key"}):
+            tool = WebReaderTool()
+            result = tool._run("https://example.com/404")
+            assert "404" in result
+
+    @patch("src.tools.web_reader_tool.ZenRowsClient", create=True)
+    def test_handles_exception(self, MockClient):
+        from src.tools.web_reader_tool import WebReaderTool
+        MockClient.return_value.get.side_effect = Exception("Connection error")
+
+        with patch.dict(os.environ, {"ZENROWS_API_KEY": "test-key"}):
+            tool = WebReaderTool()
+            result = tool._run("https://example.com")
+            assert "Failed" in result
+
+    def test_html_to_text_strips_tags(self):
+        from src.tools.web_reader_tool import _html_to_text
+        html = "<html><body><h1>Title</h1><p>Paragraph</p></body></html>"
+        text = _html_to_text(html)
+        assert "Title" in text
+        assert "Paragraph" in text
+        assert "<" not in text
+
+    def test_html_to_text_strips_scripts(self):
+        from src.tools.web_reader_tool import _html_to_text
+        html = "<p>Before</p><script>alert('xss')</script><p>After</p>"
+        text = _html_to_text(html)
+        assert "Before" in text
+        assert "After" in text
+        assert "alert" not in text
+
+    def test_prepends_https(self):
+        from src.tools.web_reader_tool import WebReaderTool
+        with patch.dict(os.environ, {"ZENROWS_API_KEY": "test-key"}):
+            with patch("src.tools.web_reader_tool.ZenRowsClient", create=True) as MockClient:
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.text = "<p>Content</p>"
+                MockClient.return_value.get.return_value = mock_response
+
+                tool = WebReaderTool()
+                tool._run("example.com")
+                MockClient.return_value.get.assert_called_with("https://example.com")
+
+
+# ---------------------------------------------------------------------------
+# FileGenTool
+# ---------------------------------------------------------------------------
+
+class TestFileGenTool:
+    def test_returns_action_plan_instructions(self):
+        from src.tools.file_gen_tool import FileGenTool
+        tool = FileGenTool()
+        result = tool._run(filename="tasks.csv", content="name,status\nBug fix,Done")
+        assert "action_plan" in result
+        assert "file_gen" in result
+
+    def test_rejects_unsupported_format(self):
+        from src.tools.file_gen_tool import FileGenTool
+        tool = FileGenTool()
+        result = tool._run(filename="data.xlsx", content="data")
+        assert "Unsupported" in result
+
+    def test_create_and_get_path_csv(self):
+        from src.tools.file_gen_tool import create_and_get_path
+        path = create_and_get_path("test.csv", "a,b\n1,2")
+        assert Path(path).exists()
+        assert Path(path).read_text() == "a,b\n1,2"
+        Path(path).unlink()
+
+    def test_create_and_get_path_json_pretty(self):
+        from src.tools.file_gen_tool import create_and_get_path
+        path = create_and_get_path("data.json", '{"key":"value"}')
+        content = Path(path).read_text()
+        assert '"key": "value"' in content  # pretty-printed
+        Path(path).unlink()
+
+    def test_create_and_get_path_markdown(self):
+        from src.tools.file_gen_tool import create_and_get_path
+        path = create_and_get_path("report.md", "# Report\n\nContent here")
+        assert Path(path).exists()
+        assert "# Report" in Path(path).read_text()
+        Path(path).unlink()
+
+
+# ---------------------------------------------------------------------------
+# ImageGenTool
+# ---------------------------------------------------------------------------
+
+class TestImageGenTool:
+    def test_returns_not_configured_without_api_key(self):
+        from src.tools.image_gen_tool import ImageGenTool
+        env = os.environ.copy()
+        env.pop("OPENAI_API_KEY", None)
+        with patch.dict(os.environ, env, clear=True):
+            tool = ImageGenTool()
+            result = tool._run(prompt="a cat in space")
+            assert "not configured" in result.lower()
+
+    def test_returns_action_plan_instructions(self):
+        from src.tools.image_gen_tool import ImageGenTool
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            tool = ImageGenTool()
+            result = tool._run(prompt="a sunset over mountains")
+            assert "action_plan" in result
+            assert "image_gen" in result
+            assert "generate_image" in result
+
+    def test_rejects_invalid_size(self):
+        from src.tools.image_gen_tool import ImageGenTool
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            tool = ImageGenTool()
+            result = tool._run(prompt="a cat", size="500x500")
+            assert "Invalid size" in result
+
+    def test_valid_sizes_accepted(self):
+        from src.tools.image_gen_tool import ImageGenTool
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            tool = ImageGenTool()
+            for size in ["1024x1024", "1024x1792", "1792x1024"]:
+                result = tool._run(prompt="test", size=size)
+                assert "action_plan" in result
+
+
+# ---------------------------------------------------------------------------
+# ReminderTool
+# ---------------------------------------------------------------------------
+
+class TestReminderTool:
+    def test_returns_action_plan_instructions(self):
+        from src.tools.reminder_tool import ReminderTool
+        tool = ReminderTool()
+        result = tool._run(message="Review PR", when="tomorrow at 9am")
+        assert "action_plan" in result
+        assert "reminder" in result
+        assert "set_reminder" in result

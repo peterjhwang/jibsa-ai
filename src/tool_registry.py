@@ -41,6 +41,22 @@ TOOL_CATALOG: dict[str, dict] = {
         "description": "Check schedule, list events, or propose calendar entries (Google Calendar — preview)",
         "write_actions": [],  # read-only stub for now
     },
+    "file_gen": {
+        "description": "Generate files (CSV, JSON, Markdown, text) and upload to Slack (requires approval)",
+        "write_actions": ["upload_file"],
+    },
+    "image_gen": {
+        "description": "Generate AI images using DALL-E (requires approval)",
+        "write_actions": ["generate_image"],
+    },
+    "reminder": {
+        "description": "Schedule reminders and timed messages (requires approval)",
+        "write_actions": ["set_reminder"],
+    },
+    "web_reader": {
+        "description": "Fetch and read full web page content using ZenRows (read-only)",
+        "write_actions": [],  # read-only tool
+    },
 }
 
 

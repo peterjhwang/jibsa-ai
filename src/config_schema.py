@@ -70,6 +70,7 @@ class IntegrationToggle(_Permissive):
 class IntegrationsConfig(_Permissive):
     notion: IntegrationToggle = IntegrationToggle()
     jira: IntegrationToggle = IntegrationToggle()
+    confluence: IntegrationToggle = IntegrationToggle()
     google_calendar: IntegrationToggle = IntegrationToggle()
     gmail: IntegrationToggle = IntegrationToggle()
 

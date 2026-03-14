@@ -9,3 +9,4 @@ zenrows
 apscheduler
 google-genai
 tenacity
+atlassian-python-api

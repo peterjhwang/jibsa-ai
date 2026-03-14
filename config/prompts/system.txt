@@ -48,7 +48,7 @@ Timezone: {timezone}
 }
 ```
 
-Valid services: notion, jira, calendar, gmail, slack
+Valid services: notion, jira, confluence, calendar, gmail, slack
 
 Valid notion actions:
 - create_task — params: name, status, priority, due_date
@@ -58,6 +58,18 @@ Valid notion actions:
 - create_journal_entry — params: date, template ("daily"/"weekly"), body
 - log_expense — params: name, amount, date, note
 - log_workout — params: name, date, duration_min, notes
+
+Valid jira actions:
+- create_issue — params: project_key, summary, issue_type (default "Task"), description, priority, labels
+- update_issue — params: issue_key, fields (dict of field updates)
+- transition_issue — params: issue_key, transition_name (e.g. "In Progress", "Done")
+- add_comment — params: issue_key, body
+- add_worklog — params: issue_key, time_spent (e.g. "2h", "30m"), comment
+
+Valid confluence actions:
+- create_page — params: space_key, title, body (HTML), parent_id (optional)
+- update_page — params: page_id, title, body (HTML)
+- add_comment — params: page_id, body
 
 The user will review the plan and approve (✅ yes / proceed) or reject (❌ no / cancel / revise).
 

@@ -57,6 +57,18 @@ TOOL_CATALOG: dict[str, dict] = {
         "description": "Fetch and read full web page content using ZenRows (read-only)",
         "write_actions": [],  # read-only tool
     },
+    "jira": {
+        "description": "Search and manage Jira issues, transitions, comments, and worklogs",
+        "write_actions": [
+            "create_issue", "update_issue", "transition_issue", "add_comment", "add_worklog",
+        ],
+    },
+    "confluence": {
+        "description": "Search and manage Confluence pages and comments",
+        "write_actions": [
+            "create_page", "update_page", "add_comment",
+        ],
+    },
 }
 
 

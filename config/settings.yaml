@@ -75,6 +75,8 @@ integrations:
     # parent_page_id: "your-page-id"  # Set via NOTION_PARENT_PAGE_ID env var or here
   jira:
     enabled: false
+  confluence:
+    enabled: false
   google_calendar:
     enabled: false
   gmail:

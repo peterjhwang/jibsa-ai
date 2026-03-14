@@ -66,12 +66,12 @@ class TestStartupValidation:
             assert "NOTION_TOKEN" in caplog.text
 
     def test_unimplemented_integration_warning(self, caplog):
-        config = {**_BASE_CONFIG, "integrations": {"jira": {"enabled": True}}}
+        config = {**_BASE_CONFIG, "integrations": {"gmail": {"enabled": True}}}
         with patch.dict(os.environ, _REQUIRED_ENV):
             import logging
             with caplog.at_level(logging.WARNING):
                 _validate_startup(config)
-            assert "jira" in caplog.text
+            assert "gmail" in caplog.text
             assert "not yet implemented" in caplog.text
 
     def test_unimplemented_scheduler_job_warning(self, caplog):

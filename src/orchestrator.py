@@ -35,6 +35,8 @@ from .tools.file_gen_tool import FileGenTool
 from .tools.image_gen_tool import ImageGenTool
 from .tools.reminder_tool import ReminderTool
 from .tools.web_reader_tool import WebReaderTool
+from .tools.jira_read_tool import JiraReadTool
+from .tools.confluence_read_tool import ConfluenceReadTool
 from .scheduler import ReminderScheduler
 
 logger = logging.getLogger(__name__)
@@ -109,7 +111,7 @@ _PROVIDER_KEY_MAP = {
 }
 
 # Integrations that have no implementation yet
-_UNIMPLEMENTED_INTEGRATIONS = {"jira", "google_calendar", "gmail"}
+_UNIMPLEMENTED_INTEGRATIONS = {"google_calendar", "gmail"}
 
 
 def _validate_startup(config: dict) -> None:
@@ -172,6 +174,11 @@ class Orchestrator:
 
         self.approval = ApprovalManager(config)
 
+        # Jira client
+        self.jira = self._build_jira_client(config)
+        # Confluence client
+        self.confluence_client = self._build_confluence_client(config)
+
         # Reminder scheduler
         tz = config.get("jibsa", {}).get("timezone", "UTC")
         self.reminder_scheduler = ReminderScheduler(slack_client, timezone=tz)
@@ -202,8 +209,10 @@ class Orchestrator:
         # Track which intern is active per thread (for approval context)
         self._thread_intern: dict[str, str | None] = {}
 
-        # Circuit breaker for Notion API calls
+        # Circuit breakers for external API calls
         self._notion_circuit = CircuitBreaker("notion", failure_threshold=3, recovery_timeout=60)
+        self._jira_circuit = CircuitBreaker("jira", failure_threshold=3, recovery_timeout=60)
+        self._confluence_circuit = CircuitBreaker("confluence", failure_threshold=3, recovery_timeout=60)
 
         # Approval history (completed/rejected plans)
         self._approval_history: list[dict] = []
@@ -246,6 +255,65 @@ class Orchestrator:
 
         # Web reader tool (read-only — fetches full page content via ZenRows)
         self.tool_registry.register_crewai_tool("web_reader", WebReaderTool())
+
+        # Jira read tool (available if Jira is connected)
+        if self.jira:
+            self.tool_registry.register_crewai_tool(
+                "jira", JiraReadTool.create(self.jira)
+            )
+
+        # Confluence read tool (available if Confluence is connected)
+        if self.confluence_client:
+            self.tool_registry.register_crewai_tool(
+                "confluence", ConfluenceReadTool.create(self.confluence_client)
+            )
+
+    @staticmethod
+    def _build_jira_client(config: dict):
+        """Build JiraClient if Jira integration is enabled and env vars are set."""
+        if not config.get("integrations", {}).get("jira", {}).get("enabled", False):
+            return None
+        server = os.environ.get("JIRA_SERVER", "")
+        email = os.environ.get("JIRA_EMAIL", "")
+        token = os.environ.get("JIRA_API_TOKEN", "")
+        if not all([server, email, token]):
+            logger.warning(
+                "Jira integration is enabled but JIRA_SERVER/JIRA_EMAIL/JIRA_API_TOKEN "
+                "are not all set — Jira features will be unavailable."
+            )
+            return None
+        try:
+            from .integrations.jira_client import JiraClient
+            client = JiraClient(server, email, token)
+            logger.info("Jira client initialized (%s)", server)
+            return client
+        except Exception:
+            logger.warning("Failed to initialize Jira client", exc_info=True)
+            return None
+
+    @staticmethod
+    def _build_confluence_client(config: dict):
+        """Build ConfluenceClient if Confluence integration is enabled and env vars are set."""
+        if not config.get("integrations", {}).get("confluence", {}).get("enabled", False):
+            return None
+        # Confluence shares Atlassian credentials with Jira
+        server = os.environ.get("JIRA_SERVER", "")
+        email = os.environ.get("JIRA_EMAIL", "")
+        token = os.environ.get("JIRA_API_TOKEN", "")
+        if not all([server, email, token]):
+            logger.warning(
+                "Confluence integration is enabled but JIRA_SERVER/JIRA_EMAIL/JIRA_API_TOKEN "
+                "are not all set — Confluence features will be unavailable."
+            )
+            return None
+        try:
+            from .integrations.confluence_client import ConfluenceClient
+            client = ConfluenceClient(server, email, token)
+            logger.info("Confluence client initialized (%s)", server)
+            return client
+        except Exception:
+            logger.warning("Failed to initialize Confluence client", exc_info=True)
+            return None
 
     def _register_activity_summary(self) -> None:
         """Register a weekly activity summary job if enabled in config."""
@@ -1249,6 +1317,26 @@ class Orchestrator:
                 result = self._execute_image_gen_step(step)
             elif service == "reminder":
                 result = self._execute_reminder_step(step, channel, thread_ts)
+            elif service == "jira" and self.jira:
+                try:
+                    self._jira_circuit.check()
+                    result = self.jira.execute_step(step)
+                    self._jira_circuit.record_success()
+                except CircuitOpenError:
+                    result = {"ok": False, "error": "Jira is temporarily unavailable (circuit open). Try again later."}
+                except Exception as e:
+                    self._jira_circuit.record_failure()
+                    result = {"ok": False, "error": f"Jira error: {e}"}
+            elif service == "confluence" and self.confluence_client:
+                try:
+                    self._confluence_circuit.check()
+                    result = self.confluence_client.execute_step(step)
+                    self._confluence_circuit.record_success()
+                except CircuitOpenError:
+                    result = {"ok": False, "error": "Confluence is temporarily unavailable (circuit open). Try again later."}
+                except Exception as e:
+                    self._confluence_circuit.record_failure()
+                    result = {"ok": False, "error": f"Confluence error: {e}"}
             else:
                 result = {"ok": False, "error": f"'{service}' not connected yet"}
             results.append((step, result))

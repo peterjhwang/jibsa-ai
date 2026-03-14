@@ -4,6 +4,7 @@ import pytest
 
 from src.intern_registry import InternRegistry
 from src.integrations.notion_client import NotionAPIError, NotionClient
+from src.integrations.notion_db_registry import DatabaseRegistry
 from src.integrations.notion_second_brain import NotionSecondBrain
 from src.models.intern import InternJD
 
@@ -34,7 +35,8 @@ INTERNS_SCHEMA = {
 def make_registry(mock_client=None) -> tuple[InternRegistry, MagicMock]:
     if mock_client is None:
         mock_client = MagicMock(spec=NotionClient)
-    brain = NotionSecondBrain(client=mock_client, databases=DATABASES)
+    db_registry = DatabaseRegistry.from_yaml(DATABASES)
+    brain = NotionSecondBrain(client=mock_client, db_registry=db_registry)
     brain._schema_cache = {INTERNS_DB: INTERNS_SCHEMA}
     registry = InternRegistry(brain, {})
     return registry, mock_client
@@ -109,7 +111,7 @@ def test_list_interns_returns_empty_on_api_error():
 
 def test_list_interns_empty_when_no_db():
     brain = MagicMock()
-    brain._get_db_id.return_value = ""
+    brain._ensure_db.return_value = ""
     registry = InternRegistry(brain, {})
     assert registry.list_interns() == []
 
@@ -166,7 +168,7 @@ def test_create_intern_duplicate_name():
 
 
 def test_create_intern_no_db():
-    brain = NotionSecondBrain(client=MagicMock(), databases=[])
+    brain = NotionSecondBrain(client=MagicMock(), db_registry=DatabaseRegistry())
     registry = InternRegistry(brain, {})
     jd = InternJD(name="X", role="X", responsibilities=[], tone="", tools_allowed=[], autonomy_rules="")
     result = registry.create_intern(jd)

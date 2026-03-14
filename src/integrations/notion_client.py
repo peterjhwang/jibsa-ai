@@ -1,7 +1,7 @@
 """
 NotionClient — thin wrapper around the official notion-client SDK.
 
-Knows nothing about PARA or Jibsa's domain. Translates SDK exceptions
+Knows nothing about Jibsa's domain. Translates SDK exceptions
 into a single local NotionAPIError so callers are insulated from SDK internals.
 """
 import logging
@@ -117,3 +117,76 @@ class NotionClient:
             return ds.get("properties", {})
         except APIResponseError as e:
             raise NotionAPIError("get_database_schema", e) from e
+
+    def create_database(self, parent_page_id: str, title: str, properties: dict) -> dict:
+        """Create a database under a page. Returns the database object."""
+        logger.debug("create_database → parent=%s title=%s", parent_page_id, title)
+        try:
+            db = self._client.databases.create(
+                parent={"type": "page_id", "page_id": parent_page_id},
+                title=[{"type": "text", "text": {"content": title}}],
+                properties=properties,
+            )
+            logger.debug("create_database ← id=%s", db.get("id"))
+            return db
+        except APIResponseError as e:
+            logger.error("create_database FAILED: %s", e)
+            raise NotionAPIError("create_database", e) from e
+
+    def create_page_under_page(
+        self,
+        parent_page_id: str,
+        title: str,
+        children: list[dict] | None = None,
+    ) -> dict:
+        """Create a page under another page (not a database)."""
+        kwargs: dict[str, Any] = {
+            "parent": {"type": "page_id", "page_id": parent_page_id},
+            "properties": {
+                "title": [{"type": "text", "text": {"content": title}}],
+            },
+        }
+        if children:
+            kwargs["children"] = children
+        logger.debug("create_page_under_page → parent=%s title=%s", parent_page_id, title)
+        try:
+            page = self._client.pages.create(**kwargs)
+            logger.debug("create_page_under_page ← id=%s", page.get("id"))
+            return page
+        except APIResponseError as e:
+            logger.error("create_page_under_page FAILED: %s", e)
+            raise NotionAPIError("create_page_under_page", e) from e
+
+    def list_child_blocks(self, block_id: str, block_type: str | None = None) -> list[dict]:
+        """List child blocks of a block/page, optionally filtered by type. Handles pagination."""
+        logger.debug("list_child_blocks → block=%s type=%s", block_id, block_type)
+        try:
+            results: list[dict] = []
+            cursor = None
+            while True:
+                kwargs: dict[str, Any] = {"block_id": block_id, "page_size": 100}
+                if cursor:
+                    kwargs["start_cursor"] = cursor
+                response = self._client.blocks.children.list(**kwargs)
+                for block in response.get("results", []):
+                    if block_type is None or block.get("type") == block_type:
+                        results.append(block)
+                if not response.get("has_more"):
+                    break
+                cursor = response.get("next_cursor")
+            logger.debug("list_child_blocks ← %d blocks", len(results))
+            return results
+        except APIResponseError as e:
+            logger.error("list_child_blocks FAILED: %s", e)
+            raise NotionAPIError("list_child_blocks", e) from e
+
+    def append_blocks(self, block_id: str, children: list[dict]) -> dict:
+        """Append content blocks to a page or block."""
+        logger.debug("append_blocks → block=%s (%d children)", block_id, len(children))
+        try:
+            result = self._client.blocks.children.append(block_id=block_id, children=children)
+            logger.debug("append_blocks ← ok")
+            return result
+        except APIResponseError as e:
+            logger.error("append_blocks FAILED: %s", e)
+            raise NotionAPIError("append_blocks", e) from e

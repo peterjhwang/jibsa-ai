@@ -34,7 +34,7 @@ class InternRegistry:
     def _interns_db_id(self) -> str:
         if not self._brain:
             return ""
-        return self._brain._get_db_id("Interns")
+        return self._brain._ensure_db("Interns")
 
     def list_interns(self, force_refresh: bool = False) -> list[InternJD]:
         """Return all active interns. Cached unless force_refresh."""

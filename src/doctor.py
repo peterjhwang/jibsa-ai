@@ -206,6 +206,20 @@ def check_notion() -> bool:
             return _fail("Notion token is invalid or expired")
         return _fail(f"Notion connection failed: {e}")
 
+    # Check parent page configuration
+    parent_page_id = os.environ.get("NOTION_PARENT_PAGE_ID", "")
+    if parent_page_id:
+        _pass(f"NOTION_PARENT_PAGE_ID is set ({parent_page_id[:8]}...)")
+        try:
+            page = client.pages.retrieve(page_id=parent_page_id)
+            title_parts = page.get("properties", {}).get("title", {}).get("title", [])
+            page_title = "".join(t.get("plain_text", "") for t in title_parts) if title_parts else "(untitled)"
+            _pass(f"Parent page accessible: '{page_title}'")
+        except Exception as e:
+            _warn(f"Could not access parent page: {e}")
+    else:
+        _warn("NOTION_PARENT_PAGE_ID not set — databases must be pre-configured in notion_databases.yaml")
+
     # Check for Interns database
     try:
         from .integrations.notion_second_brain import build_second_brain
@@ -218,15 +232,17 @@ def check_notion() -> bool:
 
         brain = build_second_brain(config)
         if brain:
+            db_count = len(brain._registry.all_databases())
+            _pass(f"{db_count} database(s) registered (yaml + discovered + cached)")
             db_id = brain._get_db_id("Interns")
             if db_id:
                 _pass("Interns database found in Notion")
             else:
-                _warn("Interns database not found — run hire flow to auto-create, or create manually")
+                _warn("Interns database not found — will be auto-created on first hire if parent page is set")
         else:
-            _warn("Could not initialize Notion Second Brain")
+            _warn("Could not initialize Notion integration")
     except Exception as e:
-        _warn(f"Could not verify Interns database: {e}")
+        _warn(f"Could not verify databases: {e}")
 
     return True
 

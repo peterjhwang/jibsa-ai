@@ -72,6 +72,7 @@ approval:
 integrations:
   notion:
     enabled: true
+    # parent_page_id: "your-page-id"  # Set via NOTION_PARENT_PAGE_ID env var or here
   jira:
     enabled: false
   google_calendar:

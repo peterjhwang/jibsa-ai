@@ -24,7 +24,7 @@ class NotionQueryInput(BaseModel):
 class NotionReadTool(BaseTool):
     name: str = "Query Notion"
     description: str = (
-        "Search the user's Notion Second Brain for information. "
+        "Search the user's Notion workspace for information. "
         "Use this to look up tasks, projects, notes, expenses, workouts, contacts, and more. "
         "This is read-only — to create or update items, propose an action plan instead."
     )

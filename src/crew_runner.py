@@ -334,7 +334,8 @@ class CrewRunner:
                 '"action": "...", "params": {...}, "description": "..."}], "needs_approval": true}\n\n'
                 "Valid services: notion, web_search, code_exec\n"
                 "Valid notion actions: create_task, update_task_status, create_project, create_note, "
-                "create_journal_entry, log_expense, log_workout\n\n"
+                "create_journal_entry, log_expense, log_workout, create_database, create_entry, "
+                "create_standalone_page, add_page_content\n\n"
                 "For read-only queries, answer directly using your tools and context."
             ),
             expected_output="Either a helpful response or a JSON action plan for approval",

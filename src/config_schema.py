@@ -64,6 +64,7 @@ class ApprovalConfig(_Permissive):
 
 class IntegrationToggle(_Permissive):
     enabled: bool = False
+    parent_page_id: str = ""
 
 
 class IntegrationsConfig(_Permissive):

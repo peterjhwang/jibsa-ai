@@ -31,6 +31,7 @@ class JibsaConfig(_Permissive):
     crew_max_iter: int = Field(default=10, ge=1, le=50)
     code_exec_timeout: int = Field(default=30, ge=5, le=120)
     code_exec_max_output: int = Field(default=4000, ge=100)
+    credential_db_path: str = "data/credentials.db"
 
 
 class SchedulerJobConfig(_Permissive):

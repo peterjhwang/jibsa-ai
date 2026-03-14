@@ -86,6 +86,12 @@ class MessageRouter:
         if cleaned_lower in ("list interns", "team", "interns", "show team", "history"):
             return RouteResult(intern_name=None, message=cleaned)
 
+        # Connection management: connect/disconnect service, my connections
+        if cleaned_lower.startswith("connect ") or cleaned_lower.startswith("disconnect "):
+            return RouteResult(intern_name=None, message=cleaned)
+        if cleaned_lower in ("my connections", "connections"):
+            return RouteResult(intern_name=None, message=cleaned)
+
         # Help command (with optional target: "help", "help alex")
         if cleaned_lower == "help" or cleaned_lower.startswith("help "):
             return RouteResult(intern_name=None, message=cleaned)

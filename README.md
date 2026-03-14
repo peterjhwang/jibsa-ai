@@ -66,6 +66,9 @@ You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
 | `@jibsa stats` | Usage metrics dashboard with recent actions |
 | `@jibsa history` | Approval history (approved/rejected plans) |
 | `@jibsa reminders` | List pending scheduled reminders |
+| `@jibsa connect google` | Start per-user Google OAuth flow (DM-based) |
+| `@jibsa disconnect google` | Revoke and delete stored Google tokens |
+| `@jibsa my connections` | List your connected services |
 
 ### Approval
 
@@ -173,6 +176,18 @@ integrations:
 
 Read tools let agents search Jira (JQL) and Confluence (CQL) during reasoning. Write operations go through the standard propose-approve flow.
 
+### Per-User Credentials (Google OAuth)
+
+Team-shared integrations (Notion, Jira, Confluence) use a single API token in `.env`. Personal services (Google Calendar, Gmail) use **per-user OAuth** — each team member connects their own account:
+
+```
+@jibsa connect google    → Jibsa DMs you an OAuth link
+                         → you authorize and paste the code back
+                         → tokens stored encrypted (Fernet + SQLite)
+```
+
+Credentials are encrypted at rest with AES-128-CBC and keyed by Slack user ID — one user cannot access another's tokens. See [Google OAuth Setup](docs/google-oauth-setup.md) for details.
+
 ---
 
 ## Quick Start
@@ -226,9 +241,8 @@ docker-compose up -d
 
 - **[Slack App Setup](docs/slack-setup.md)** — Create and configure the Slack app
 - **[Notion Setup](docs/notion-setup.md)** — Connect your Notion Second Brain
-- **[Feature Roadmap](docs/feature-impact-effort.md)** — Planned features with impact/effort analysis
-- **[Platform Enhancements](docs/feature-platform-enhancements.md)** — JD templates, doctor CLI, multi-model failover
-- **[Contributing](CONTRIBUTING.md)** — Development setup, testing, architecture
+- **[Jira + Confluence Setup](docs/jira-confluence-setup.md)** — Connect Atlassian (team-shared API token)
+- **[Google OAuth Setup](docs/google-oauth-setup.md)** — Per-user Google Calendar + Gmail credentials
 
 ---
 
@@ -281,6 +295,7 @@ jibsa-ai/
 │   ├── approval.py             # ApprovalState machine per Slack thread (with TTL)
 │   ├── config_schema.py        # Pydantic validation for settings.yaml
 │   ├── doctor.py               # Health check CLI (python -m src.doctor)
+│   ├── context.py              # ContextVar for per-request user identity
 │   ├── circuit_breaker.py      # Three-state circuit breaker for API resilience
 │   ├── metrics.py              # In-memory request tracking and stats
 │   ├── scheduler.py            # APScheduler wrapper for timed reminders
@@ -302,7 +317,9 @@ jibsa-ai/
 │       ├── notion_client.py        # Thin Notion SDK wrapper (retry/backoff)
 │       ├── notion_second_brain.py  # Schema-free PARA operations
 │       ├── jira_client.py          # Thin Jira wrapper (retry/backoff, execute_step)
-│       └── confluence_client.py    # Thin Confluence wrapper (retry/backoff, execute_step)
+│       ├── confluence_client.py    # Thin Confluence wrapper (retry/backoff, execute_step)
+│       ├── credential_store.py    # Fernet-encrypted SQLite per-user credential store
+│       └── google_oauth.py        # Google OAuth2 OOB flow (per-user tokens)
 │
 ├── config/
 │   ├── settings.yaml           # LLM, channel, timezone, approval, integrations
@@ -321,7 +338,8 @@ jibsa-ai/
 │   ├── test.sh                 # Run pytest
 │   └── doctor.sh               # Health check (runtime, deps, env, config)
 │
-├── tests/                      # pytest test suite (409 passing)
+├── data/                       # SQLite credential store (gitignored)
+├── tests/                      # pytest test suite (435 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
 ├── requirements.in             # Loose dependency constraints (edit this)
@@ -382,6 +400,7 @@ graph TD
 | Notion writes | Runtime schema discovery | Auto-detect property types, no hardcoded schemas |
 | Intern storage | Notion database | JDs stored in Notion Interns DB with caching |
 | Database routing | Keyword matching | Config-driven — add any Notion database without code changes |
+| Personal credentials | Fernet + SQLite | Per-user OAuth tokens encrypted at rest, keyed by Slack user ID |
 
 ---
 
@@ -401,7 +420,7 @@ graph TD
 ./scripts/test.sh --cov=src --cov-report=term-missing
 ```
 
-409 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 11 tools, Jira/Confluence clients, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
+435 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 11 tools, Jira/Confluence clients, credential store, Google OAuth, connection commands, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
 
 ---
 
@@ -413,6 +432,8 @@ graph TD
 - LLM API key (Anthropic, OpenAI, or Google — depending on `settings.yaml` config)
 - Notion integration token (for Second Brain + intern storage)
 - **Optional:** `JIRA_SERVER`, `JIRA_EMAIL`, `JIRA_API_TOKEN` for Jira + Confluence integration
+- **Optional:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` for per-user Google OAuth (Calendar + Gmail)
+- **Optional:** `CREDENTIAL_ENCRYPTION_KEY` for persistent encrypted credential storage
 - **Optional:** `ZENROWS_API_KEY` for the Web Reader tool and web search fallback
 - **Optional:** `GOOGLE_API_KEY` for Nano Banana 2 image generation (also used if your LLM provider is Google)
 
@@ -428,8 +449,9 @@ graph TD
 | **2.6** | Reliability (config validation, circuit breaker, metrics, approval TTL) | ✅ Done |
 | **2.7** | New tools: Web Reader, File Gen, Image Gen, Reminders + team collaboration | ✅ Done |
 | **2.8** | UX: help, edit JD, history, Block Kit, doctor CLI, activity digest | ✅ Done |
-| **3** | Jira + Confluence integration, hardening (retry, shutdown, sandbox, rate limiting) | ✅ Done |
-| **4** | Google Calendar + Gmail + scheduled jobs (morning briefing, EOD review) | 🔜 |
+| **3** | Jira + Confluence, hardening (retry, shutdown, sandbox, rate limiting) | ✅ Done |
+| **3.5** | Per-user credential store (encrypted SQLite + Google OAuth) | ✅ Done |
+| **4** | Google Calendar + Gmail tools + scheduled jobs (morning briefing, EOD review) | 🔜 |
 | **5** | Setup wizard, audit logging, open-source polish | 🔜 |
 
 ## License

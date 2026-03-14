@@ -44,7 +44,9 @@ Socket Mode lets Jibsa connect without a public URL.
 | `channels:history` | Read messages in public channels |
 | `channels:read` | Look up channel info |
 | `users:read` | Resolve user IDs to names |
-| `im:write` | Open DMs (for Phase 4 team interactions) |
+| `im:history` | Read DMs (for OAuth code flow) |
+| `im:write` | Open DMs (for OAuth link delivery) |
+| `files:write` | Upload generated files and images |
 
 ---
 
@@ -53,7 +55,7 @@ Socket Mode lets Jibsa connect without a public URL.
 1. In the left sidebar, go to **Event Subscriptions**
 2. Toggle **Enable Events** ON
 3. Under **Subscribe to bot events**, click **Add Bot User Event**
-4. Add: `message.channels`
+4. Add: `message.channels`, `message.im`
 5. Click **Save Changes**
 
 ---
@@ -96,7 +98,7 @@ SLACK_APP_TOKEN=xapp-...
 Start Jibsa:
 
 ```bash
-.venv/bin/python -m src.app
+./scripts/run.sh
 ```
 
 You should see:

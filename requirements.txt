@@ -97,7 +97,11 @@ frozenlist==1.8.0
 fsspec==2026.2.0
     # via huggingface-hub
 google-auth==2.49.1
-    # via google-genai
+    # via
+    #   google-auth-oauthlib
+    #   google-genai
+google-auth-oauthlib==1.3.0
+    # via -r requirements.in
 google-genai==1.67.0
     # via -r requirements.in
 googleapis-common-protos==1.73.0
@@ -362,6 +366,7 @@ requests==2.32.5
 requests-oauthlib==2.0.0
     # via
     #   atlassian-python-api
+    #   google-auth-oauthlib
     #   kubernetes
 rich==14.3.3
     # via

@@ -10,3 +10,4 @@ apscheduler
 google-genai
 tenacity
 atlassian-python-api
+google-auth-oauthlib

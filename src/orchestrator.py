@@ -38,6 +38,9 @@ from .tools.web_reader_tool import WebReaderTool
 from .tools.jira_read_tool import JiraReadTool
 from .tools.confluence_read_tool import ConfluenceReadTool
 from .scheduler import ReminderScheduler
+from .integrations.credential_store import CredentialStore
+from .integrations.google_oauth import GoogleOAuthManager
+from .context import current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +49,7 @@ _CONFIG_DIR = Path(__file__).parent.parent / "config"
 # Commands handled directly by the orchestrator (not routed to interns/LLM)
 MANAGEMENT_COMMANDS = {
     "list interns", "team", "interns", "show team", "stats", "reminders",
-    "history", "help",
+    "history", "help", "my connections", "connections",
 }
 
 
@@ -221,6 +224,14 @@ class Orchestrator:
         self._edit_sessions: dict[str, tuple[str, float]] = {}
         self._edit_session_ttl: float = 3600.0  # 1 hour TTL
 
+        # Per-user credential store and Google OAuth
+        db_path = config.get("jibsa", {}).get("credential_db_path", "data/credentials.db")
+        self.credential_store = CredentialStore(db_path=db_path)
+        self.google_oauth = GoogleOAuthManager(self.credential_store)
+
+        # Pending OAuth flows: user_id → service name
+        self._pending_oauth: dict[str, str] = {}
+
         # Register activity summary scheduler
         self._register_activity_summary()
 
@@ -382,9 +393,11 @@ class Orchestrator:
         start_time = time.monotonic()
         logger.info("[%s] message from %s in %s: %.80s", request_id, user, thread_ts, text)
 
+        token = current_user_id.set(user)
         try:
             self._dispatch(channel, thread_ts, user, text)
         finally:
+            current_user_id.reset(token)
             elapsed = time.monotonic() - start_time
             logger.info("[%s] completed in %.1fs", request_id, elapsed)
 
@@ -398,6 +411,11 @@ class Orchestrator:
         """Internal dispatch — separated for tracing wrapper."""
         # Periodic cleanup of expired edit sessions
         self._cleanup_edit_sessions()
+
+        # Priority 0.3: Pending OAuth code (user pasting auth code in DM)
+        if user in self._pending_oauth and channel.startswith("D"):
+            self._handle_oauth_code(channel, thread_ts, user, text)
+            return
 
         # Priority 0.5: Active edit session
         if thread_ts in self._edit_sessions:
@@ -431,8 +449,20 @@ class Orchestrator:
                 self._handle_history(channel, thread_ts)
             elif cmd == "help":
                 self._handle_help(channel, thread_ts)
+            elif cmd in ("my connections", "connections"):
+                self._handle_list_connections(channel, thread_ts, user)
             else:
                 self._handle_list_interns(channel, thread_ts)
+            return
+
+        # Connect/disconnect service
+        if cmd.startswith("connect ") and not route.intern_name:
+            service = cmd[8:].strip()
+            self._handle_connect(channel, thread_ts, user, service)
+            return
+        if cmd.startswith("disconnect ") and not route.intern_name:
+            service = cmd[11:].strip()
+            self._handle_disconnect(channel, thread_ts, user, service)
             return
 
         # Help with target: "help alex"
@@ -1627,6 +1657,99 @@ class Orchestrator:
         for ts in expired:
             self._edit_sessions.pop(ts, None)
             logger.debug("Expired edit session for thread %s", ts)
+
+    # ------------------------------------------------------------------
+    # Connection management (per-user OAuth)
+    # ------------------------------------------------------------------
+
+    _SUPPORTED_SERVICES = {"google"}
+
+    def _handle_connect(self, channel: str, thread_ts: str, user: str, service: str) -> None:
+        """Start an OAuth flow for a service."""
+        if service not in self._SUPPORTED_SERVICES:
+            self._post(channel, thread_ts, f"Unknown service '{service}'. Supported: {', '.join(sorted(self._SUPPORTED_SERVICES))}")
+            return
+
+        if service == "google":
+            if not self.google_oauth.is_configured:
+                self._post(channel, thread_ts, "Google OAuth is not configured. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env`.")
+                return
+
+            # Check if already connected
+            existing = self.credential_store.list_services(user)
+            if "google" in existing:
+                self._post(channel, thread_ts, "You're already connected to Google. Say `disconnect google` first if you want to reconnect.")
+                return
+
+            auth_url = self.google_oauth.generate_auth_url()
+            if not auth_url:
+                self._post(channel, thread_ts, "Failed to generate authorization URL.")
+                return
+
+            # DM the user with the auth URL
+            try:
+                dm = self.slack.conversations_open(users=user)
+                dm_channel = dm["channel"]["id"]
+                self.slack.chat_postMessage(
+                    channel=dm_channel,
+                    text=(
+                        "*Connect Google Account*\n\n"
+                        "1. Click the link below to authorize Jibsa:\n"
+                        f"   {auth_url}\n\n"
+                        "2. After authorizing, Google will show you a code.\n"
+                        "3. *Paste that code here* (in this DM).\n\n"
+                        "_This link expires in a few minutes._"
+                    ),
+                )
+                self._pending_oauth[user] = service
+                self._post(channel, thread_ts, "I've sent you a DM with the authorization link. Follow the steps there.")
+            except Exception as e:
+                logger.error("Failed to DM user %s: %s", user, e)
+                self._post(channel, thread_ts, f"Couldn't send you a DM. Error: {e}")
+
+    def _handle_disconnect(self, channel: str, thread_ts: str, user: str, service: str) -> None:
+        """Revoke and delete stored credentials for a service."""
+        if service not in self._SUPPORTED_SERVICES:
+            self._post(channel, thread_ts, f"Unknown service '{service}'. Supported: {', '.join(sorted(self._SUPPORTED_SERVICES))}")
+            return
+
+        if service == "google":
+            result = self.google_oauth.revoke_and_delete(user)
+            if result["ok"]:
+                self._post(channel, thread_ts, "Disconnected from Google. Your credentials have been revoked and deleted.")
+            else:
+                self._post(channel, thread_ts, f"Could not disconnect: {result['error']}")
+
+    def _handle_list_connections(self, channel: str, thread_ts: str, user: str) -> None:
+        """List the user's connected services."""
+        services = self.credential_store.list_services(user)
+        if not services:
+            self._post(channel, thread_ts, "You have no connected services. Say `connect google` to get started.")
+            return
+
+        lines = ["*Your Connected Services*\n"]
+        for svc in services:
+            lines.append(f"  - {svc}")
+        lines.append("\n_Say `disconnect <service>` to remove a connection._")
+        self._post(channel, thread_ts, "\n".join(lines))
+
+    def _handle_oauth_code(self, channel: str, thread_ts: str, user: str, text: str) -> None:
+        """Handle a pasted OAuth authorization code in DM."""
+        service = self._pending_oauth.pop(user, None)
+        if not service:
+            return
+
+        code = text.strip()
+        if not code or len(code) < 10:
+            self._post(channel, thread_ts, "That doesn't look like a valid authorization code. Please try `connect google` again.")
+            return
+
+        if service == "google":
+            result = self.google_oauth.exchange_code(user, code)
+            if result["ok"]:
+                self._post(channel, thread_ts, "Connected to Google! Your Calendar and Gmail are now available to your interns.")
+            else:
+                self._post(channel, thread_ts, f"Authorization failed: {result['error']}\n\nSay `connect google` to try again.")
 
     # ------------------------------------------------------------------
     # Helpers

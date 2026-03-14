@@ -53,6 +53,8 @@ You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
 
 | Command | What it does |
 |---------|-------------|
+| `@jibsa templates` | Browse pre-built intern templates |
+| `@jibsa hire from template content` | Instantly hire a pre-built intern |
 | `@jibsa hire a marketing intern` | Start conversational hiring flow |
 | `@jibsa alex write 3 blog posts` | Delegate a task to intern Alex |
 | `@jibsa ask mia to research competitors` | Alternative routing syntax |
@@ -82,6 +84,7 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 ## Features
 
 ### Multi-Intern System
+- **Pre-built templates** — 5 ready-to-use SaaS interns: Content Marketing, Sales Ops, Support Triage, Standup Bot, Metrics Reporter. Hire instantly with `hire from template <name>`
 - **Conversational hiring** — describe what you need, Jibsa helps you write a complete Job Description
 - **Ambiguity detection** — interns ask clarifying questions when a request is vague or missing critical details before proposing an action
 - **JD validation** — enforces name, role, responsibilities, tool assignments
@@ -352,7 +355,7 @@ jibsa-ai/
 │   └── doctor.sh               # Health check (runtime, deps, env, config)
 │
 ├── data/                       # SQLite credential store (gitignored)
-├── tests/                      # pytest test suite (479 passing)
+├── tests/                      # pytest test suite (495 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
 ├── requirements.in             # Loose dependency constraints (edit this)
@@ -436,7 +439,7 @@ graph TD
 ./scripts/test.sh --cov=src --cov-report=term-missing
 ```
 
-479 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 13 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
+495 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 13 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
 
 ---
 

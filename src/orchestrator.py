@@ -25,6 +25,7 @@ from .hire_flow import HireFlowManager
 from .metrics import MetricsTracker
 from .intern_registry import InternRegistry
 from .integrations.audit_store import AuditStore
+from .intern_templates import list_templates, get_template, template_to_jd
 from .integrations.intern_store import InternStore
 from .integrations.notion_second_brain import build_second_brain
 from .models.intern import InternJD
@@ -54,7 +55,7 @@ _CONFIG_DIR = Path(__file__).parent.parent / "config"
 # Commands handled directly by the orchestrator (not routed to interns/LLM)
 MANAGEMENT_COMMANDS = {
     "list interns", "team", "interns", "show team", "stats", "reminders",
-    "history", "help", "audit", "my connections", "connections",
+    "history", "help", "audit", "templates", "my connections", "connections",
 }
 
 
@@ -642,6 +643,8 @@ class Orchestrator:
                 self._handle_help(channel, thread_ts)
             elif cmd == "audit":
                 self._handle_audit(channel, thread_ts)
+            elif cmd == "templates":
+                self._handle_templates(channel, thread_ts)
             elif cmd in ("my connections", "connections"):
                 self._handle_list_connections(channel, thread_ts, user)
             else:
@@ -689,6 +692,12 @@ class Orchestrator:
             return
 
         if route.is_hire:
+            # Check for "hire from template <name>" pattern
+            msg_lower = route.message.lower()
+            if "from template" in msg_lower:
+                tmpl_name = msg_lower.split("from template", 1)[1].strip()
+                self._handle_hire_from_template(channel, thread_ts, user, tmpl_name)
+                return
             self._start_hire_flow(channel, thread_ts, user, route.message)
             return
 
@@ -759,6 +768,71 @@ class Orchestrator:
 
         fallback = "\n".join(f"  *{i.name}* — {i.role}" for i in interns)
         self._post_blocks(channel, thread_ts, blocks, f"Your AI Interns:\n{fallback}")
+
+    def _handle_templates(self, channel: str, thread_ts: str) -> None:
+        """List available intern templates."""
+        templates = list_templates()
+        blocks = [
+            {"type": "header", "text": {"type": "plain_text", "text": "Intern Templates"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "Ready-to-use interns. Hire one with `hire from template <name>`."}},
+            {"type": "divider"},
+        ]
+        for tmpl in templates:
+            tools_str = ", ".join(tmpl["tools"])
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*{tmpl['name']}* — {tmpl['role']}\n"
+                        f"  Tools: {tools_str}\n"
+                        f"  Responsibilities: {tmpl['responsibilities_count']} defined\n"
+                        f"  _Hire: `hire from template {tmpl['key']}`_"
+                    ),
+                },
+            })
+        text = "Intern Templates\n" + "\n".join(f"- {t['name']} ({t['role']})" for t in templates)
+        self._post_blocks(channel, thread_ts, blocks, text)
+
+    def _handle_hire_from_template(self, channel: str, thread_ts: str, user: str, template_name: str) -> None:
+        """Create an intern from a pre-built template."""
+        tmpl = get_template(template_name)
+        if not tmpl:
+            available = ", ".join(t["key"] for t in list_templates())
+            self._post(
+                channel, thread_ts,
+                f"No template named '{template_name}'. Available: {available}\n"
+                f"Say `templates` to see details.",
+            )
+            return
+
+        # Check if an intern with this name already exists
+        if self.intern_registry.get_intern(tmpl["name"]):
+            self._post(
+                channel, thread_ts,
+                f"An intern named '{tmpl['name']}' already exists. "
+                f"Fire them first (`fire {tmpl['name'].lower()}`) or hire with a custom name.",
+            )
+            return
+
+        jd = template_to_jd(tmpl, created_by=user)
+        result = self.intern_registry.create_intern(jd)
+
+        if result.get("ok"):
+            self.router.update_names(self.intern_registry.get_intern_names())
+            self.audit.log(
+                action="intern_created",
+                user_id=user,
+                details={"name": jd.name, "role": jd.role, "template": template_name},
+            )
+            self._post(
+                channel, thread_ts,
+                f"✅ *{jd.name}* ({jd.role}) is ready!\n\n"
+                f"Try: `@jibsa {jd.name.lower()} <your request>`\n"
+                f"Say `show {jd.name.lower()}'s jd` to see the full Job Description.",
+            )
+        else:
+            self._post(channel, thread_ts, f"⚠️ Failed to create intern: {result.get('error', 'unknown error')}")
 
     def _handle_fire_intern(self, channel: str, thread_ts: str, name: str) -> None:
         """Deactivate an intern."""

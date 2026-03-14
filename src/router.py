@@ -83,7 +83,7 @@ class MessageRouter:
                 )
 
         # Management commands are passed through to orchestrator (not routed to interns)
-        if cleaned_lower in ("list interns", "team", "interns", "show team", "history"):
+        if cleaned_lower in ("list interns", "team", "interns", "show team", "history", "templates"):
             return RouteResult(intern_name=None, message=cleaned)
 
         # Connection management: connect/disconnect service, my connections

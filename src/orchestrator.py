@@ -189,7 +189,8 @@ class Orchestrator:
 
         # Reminder scheduler
         tz = config.get("jibsa", {}).get("timezone", "UTC")
-        self.reminder_scheduler = ReminderScheduler(slack_client, timezone=tz)
+        scheduler_db = config.get("jibsa", {}).get("intern_db_path", "data/jibsa.db")
+        self.reminder_scheduler = ReminderScheduler(slack_client, timezone=tz, db_path=scheduler_db)
         self.reminder_scheduler.start()
 
         # CrewAI runner

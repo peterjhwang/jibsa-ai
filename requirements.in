@@ -12,3 +12,4 @@ tenacity
 atlassian-python-api
 google-auth-oauthlib
 google-api-python-client
+sqlalchemy

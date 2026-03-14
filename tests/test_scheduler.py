@@ -14,8 +14,8 @@ def mock_slack():
 
 
 @pytest.fixture
-def scheduler(mock_slack):
-    s = ReminderScheduler(mock_slack, timezone="UTC")
+def scheduler(mock_slack, tmp_path):
+    s = ReminderScheduler(mock_slack, timezone="UTC", db_path=str(tmp_path / "test.db"), persist=False)
     s.start()
     yield s
     s.shutdown()

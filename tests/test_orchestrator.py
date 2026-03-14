@@ -4,16 +4,34 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.orchestrator import Orchestrator
+from src.models.intern import InternJD
 
-CONFIG = {
-    "jibsa": {"max_history": 20, "claude_timeout": 120, "timezone": "UTC"},
-    "llm": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
-    "approval": {
-        "approve_keywords": ["✅", "yes", "approved", "go", "go ahead", "do it", "proceed"],
-        "reject_keywords": ["❌", "no", "cancel", "stop", "revise", "change"],
-    },
-    "integrations": {},
-}
+
+def _register_intern(orchestrator, name="Alex", role="Dev", **kwargs):
+    """Helper: insert an intern into SQLite and update the router."""
+    defaults = {
+        "responsibilities": ["Code"], "tone": "direct",
+        "tools_allowed": ["notion"], "autonomy_rules": "ask first",
+    }
+    defaults.update(kwargs)
+    jd = InternJD(name=name, role=role, **defaults)
+    orchestrator.intern_registry.create_intern(jd)
+    orchestrator.router.update_names(orchestrator.intern_registry.get_intern_names())
+
+def _make_config(tmp_path):
+    return {
+        "jibsa": {
+            "max_history": 20, "claude_timeout": 120, "timezone": "UTC",
+            "intern_db_path": str(tmp_path / "interns.db"),
+            "credential_db_path": str(tmp_path / "creds.db"),
+        },
+        "llm": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+        "approval": {
+            "approve_keywords": ["✅", "yes", "approved", "go", "go ahead", "do it", "proceed"],
+            "reject_keywords": ["❌", "no", "cancel", "stop", "revise", "change"],
+        },
+        "integrations": {},
+    }
 
 # Env vars required for startup validation
 _REQUIRED_ENV = {
@@ -31,13 +49,14 @@ def mock_slack():
 
 
 @pytest.fixture
-def orchestrator(mock_slack):
+def orchestrator(mock_slack, tmp_path):
+    config = _make_config(tmp_path)
     with patch.dict(os.environ, _REQUIRED_ENV), \
          patch("src.orchestrator.CrewRunner") as MockRunner, \
          patch("src.orchestrator.build_second_brain", return_value=None):
         mock_runner = MagicMock()
         MockRunner.return_value = mock_runner
-        orch = Orchestrator(mock_slack, CONFIG)
+        orch = Orchestrator(mock_slack, config)
         orch.runner = mock_runner
         return orch
 
@@ -143,11 +162,8 @@ def test_stats_command(orchestrator, mock_slack):
 def test_form_team_routes_correctly(orchestrator, mock_slack):
     """form team should invoke run_for_team when interns are registered."""
     orchestrator.runner.run_for_team = MagicMock(return_value="Team analysis complete")
-    from src.models.intern import InternJD
-    alex = InternJD(name="Alex", role="Dev", responsibilities=["Code"], tone="direct", tools_allowed=["notion"], autonomy_rules="ask before acting")
-    sarah = InternJD(name="Sarah", role="QA", responsibilities=["Test"], tone="friendly", tools_allowed=["notion"], autonomy_rules="ask before acting")
-    orchestrator.intern_registry._cache = [alex, sarah]
-    orchestrator.router.update_names(["alex", "sarah"])
+    _register_intern(orchestrator, "Alex", "Dev", responsibilities=["Code"], autonomy_rules="ask before acting")
+    _register_intern(orchestrator, "Sarah", "QA", responsibilities=["Test"], tone="friendly", autonomy_rules="ask before acting")
 
     orchestrator.handle_message("C123", "ts-team", "U001", "form team alex, sarah to review the code")
     orchestrator.runner.run_for_team.assert_called_once()
@@ -159,7 +175,7 @@ def test_form_team_routes_correctly(orchestrator, mock_slack):
 def test_form_team_unknown_intern_posts_warning(orchestrator, mock_slack):
     """form team with an unknown intern should post a warning."""
     orchestrator.router.update_names(["alex", "sarah"])
-    # Don't register the interns in the registry — get_intern will return None
+    # Don't register the interns in the store — get_intern will return None
     orchestrator.handle_message("C123", "ts-team2", "U001", "form team alex, sarah to do stuff")
     mock_slack.chat_postMessage.assert_called()
     text = mock_slack.chat_postMessage.call_args.kwargs["text"]
@@ -338,13 +354,7 @@ def test_help_command_posts_blocks(orchestrator, mock_slack):
 
 
 def test_help_for_intern(orchestrator, mock_slack):
-    from src.models.intern import InternJD
-    alex = InternJD(
-        name="Alex", role="Dev", responsibilities=["Code"],
-        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
-    )
-    orchestrator.intern_registry._cache = [alex]
-    orchestrator.router.update_names(["alex"])
+    _register_intern(orchestrator, "Alex", "Dev")
 
     orchestrator.handle_message("C123", "ts-help2", "U001", "help alex")
     call_kwargs = mock_slack.chat_postMessage.call_args.kwargs
@@ -359,13 +369,7 @@ def test_help_for_intern(orchestrator, mock_slack):
 # ---------------------------------------------------------------------------
 
 def test_edit_starts_session(orchestrator, mock_slack):
-    from src.models.intern import InternJD
-    alex = InternJD(
-        name="Alex", role="Dev", responsibilities=["Code"],
-        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
-    )
-    orchestrator.intern_registry._cache = [alex]
-    orchestrator.router.update_names(["alex"])
+    _register_intern(orchestrator, "Alex", "Dev")
 
     orchestrator.handle_message("C123", "ts-edit", "U001", "edit alex's jd")
     assert "ts-edit" in orchestrator._edit_sessions
@@ -380,13 +384,7 @@ def test_edit_unknown_intern(orchestrator, mock_slack):
 
 
 def test_edit_cancel_ends_session(orchestrator, mock_slack):
-    from src.models.intern import InternJD
-    alex = InternJD(
-        name="Alex", role="Dev", responsibilities=["Code"],
-        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
-    )
-    orchestrator.intern_registry._cache = [alex]
-    orchestrator.router.update_names(["alex"])
+    _register_intern(orchestrator, "Alex", "Dev")
 
     orchestrator.handle_message("C123", "ts-edit3", "U001", "edit alex's jd")
     assert "ts-edit3" in orchestrator._edit_sessions
@@ -397,14 +395,7 @@ def test_edit_cancel_ends_session(orchestrator, mock_slack):
 
 
 def test_edit_simple_tone_change(orchestrator, mock_slack):
-    from src.models.intern import InternJD
-    alex = InternJD(
-        name="Alex", role="Dev", responsibilities=["Code"],
-        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
-        notion_page_id="page-123",
-    )
-    orchestrator.intern_registry._cache = [alex]
-    orchestrator.router.update_names(["alex"])
+    _register_intern(orchestrator, "Alex", "Dev")
 
     # Start edit session
     orchestrator.handle_message("C123", "ts-edit4", "U001", "edit alex's jd")
@@ -423,7 +414,6 @@ def test_edit_simple_tone_change(orchestrator, mock_slack):
 # ---------------------------------------------------------------------------
 
 def test_parse_edit_add_responsibility(orchestrator):
-    from src.models.intern import InternJD
     intern = InternJD(
         name="Alex", role="Dev", responsibilities=["Write code"],
         tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
@@ -436,7 +426,6 @@ def test_parse_edit_add_responsibility(orchestrator):
 
 
 def test_parse_edit_remove_responsibility(orchestrator):
-    from src.models.intern import InternJD
     intern = InternJD(
         name="Alex", role="Dev", responsibilities=["Write code", "Write tests"],
         tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
@@ -448,7 +437,6 @@ def test_parse_edit_remove_responsibility(orchestrator):
 
 
 def test_parse_edit_add_tool(orchestrator):
-    from src.models.intern import InternJD
     intern = InternJD(
         name="Alex", role="Dev", responsibilities=["Code"],
         tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
@@ -459,7 +447,6 @@ def test_parse_edit_add_tool(orchestrator):
 
 
 def test_parse_edit_add_invalid_tool(orchestrator):
-    from src.models.intern import InternJD
     intern = InternJD(
         name="Alex", role="Dev", responsibilities=["Code"],
         tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
@@ -469,7 +456,6 @@ def test_parse_edit_add_invalid_tool(orchestrator):
 
 
 def test_parse_edit_change_role(orchestrator):
-    from src.models.intern import InternJD
     intern = InternJD(
         name="Alex", role="Dev", responsibilities=["Code"],
         tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
@@ -534,27 +520,15 @@ def test_history_command_shows_entries(orchestrator, mock_slack):
 # ---------------------------------------------------------------------------
 
 def test_list_interns_posts_blocks(orchestrator, mock_slack):
-    from src.models.intern import InternJD
-    alex = InternJD(
-        name="Alex", role="Dev", responsibilities=["Code"],
-        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
-    )
-    # Patch list_interns to return our test data (force_refresh=True bypasses cache)
-    with patch.object(orchestrator.intern_registry, "list_interns", return_value=[alex]):
-        orchestrator.handle_message("C123", "ts-list2", "U001", "list interns")
+    _register_intern(orchestrator, "Alex", "Dev")
+    orchestrator.handle_message("C123", "ts-list2", "U001", "list interns")
     call_kwargs = mock_slack.chat_postMessage.call_args.kwargs
     assert "blocks" in call_kwargs
     assert any(b.get("type") == "header" for b in call_kwargs["blocks"])
 
 
 def test_show_jd_posts_blocks(orchestrator, mock_slack):
-    from src.models.intern import InternJD
-    alex = InternJD(
-        name="Alex", role="Dev", responsibilities=["Code"],
-        tone="direct", tools_allowed=["notion"], autonomy_rules="ask first",
-    )
-    orchestrator.intern_registry._cache = [alex]
-    orchestrator.router.update_names(["alex"])
+    _register_intern(orchestrator, "Alex", "Dev")
 
     orchestrator.handle_message("C123", "ts-show", "U001", "show alex's jd")
     call_kwargs = mock_slack.chat_postMessage.call_args.kwargs

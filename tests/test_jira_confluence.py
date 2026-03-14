@@ -350,26 +350,31 @@ _REQUIRED_ENV = {
     "ANTHROPIC_API_KEY": "sk-ant-test",
 }
 
-_BASE_CONFIG = {
-    "jibsa": {"max_history": 20, "claude_timeout": 120, "timezone": "UTC"},
-    "llm": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
-    "approval": {
-        "approve_keywords": ["yes"],
-        "reject_keywords": ["no"],
-    },
-    "integrations": {},
-}
+def _make_config(tmp_path):
+    return {
+        "jibsa": {
+            "max_history": 20, "claude_timeout": 120, "timezone": "UTC",
+            "intern_db_path": str(tmp_path / "interns.db"),
+            "credential_db_path": str(tmp_path / "creds.db"),
+        },
+        "llm": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+        "approval": {
+            "approve_keywords": ["yes"],
+            "reject_keywords": ["no"],
+        },
+        "integrations": {},
+    }
 
 
 class TestOrchestratorJiraDispatch:
     @pytest.fixture
-    def orch(self):
+    def orch(self, tmp_path):
         with patch.dict(os.environ, _REQUIRED_ENV), \
              patch("src.orchestrator.CrewRunner") as MockRunner, \
              patch("src.orchestrator.build_second_brain", return_value=None):
             MockRunner.return_value = MagicMock()
             from src.orchestrator import Orchestrator
-            o = Orchestrator(MagicMock(), _BASE_CONFIG)
+            o = Orchestrator(MagicMock(), _make_config(tmp_path))
             # Inject mock jira client
             o.jira = MagicMock()
             o.confluence_client = MagicMock()

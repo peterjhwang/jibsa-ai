@@ -201,10 +201,8 @@ class HireFlowManager:
         del self._sessions[session.thread_ts]
 
         if result.get("ok"):
-            url = result.get("url", "")
-            url_text = f" (<{url}|view in Notion>)" if url else ""
             return (
-                f"✅ *Intern '{intern.name}' is ready!*{url_text}\n\n"
+                f"✅ *Intern '{intern.name}' is ready!*\n\n"
                 f"You can now assign tasks: `@jibsa {intern.name.lower()} <your request>`"
             )
         else:

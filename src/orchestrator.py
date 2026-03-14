@@ -22,6 +22,7 @@ from .crew_runner import CrewRunner
 from .hire_flow import HireFlowManager
 from .metrics import MetricsTracker
 from .intern_registry import InternRegistry
+from .integrations.intern_store import InternStore
 from .integrations.notion_second_brain import build_second_brain
 from .models.intern import InternJD
 from .router import MessageRouter, RouteResult
@@ -169,11 +170,17 @@ class Orchestrator:
         self.slack = slack_client
         self.config = config
 
-        try:
-            self.notion = build_second_brain(config)
-        except Exception:
-            logger.warning("Failed to initialize Notion Second Brain — continuing without it", exc_info=True)
+        # Notion Second Brain (optional — for read/write to user's Notion databases)
+        notion_enabled = config.get("integrations", {}).get("notion", {}).get("enabled", False)
+        if notion_enabled:
+            try:
+                self.notion = build_second_brain(config)
+            except Exception:
+                logger.warning("Failed to initialize Notion Second Brain — continuing without it", exc_info=True)
+                self.notion = None
+        else:
             self.notion = None
+            logger.info("Notion integration is disabled")
 
         self.approval = ApprovalManager(config)
 
@@ -197,8 +204,10 @@ class Orchestrator:
         self.tool_registry = ToolRegistry()
         self._register_crewai_tools()
 
-        # Intern management
-        self.intern_registry = InternRegistry(self.notion, config)
+        # Intern management (SQLite-backed)
+        db_path = config.get("jibsa", {}).get("intern_db_path", "data/jibsa.db")
+        self.intern_store = InternStore(db_path=db_path)
+        self.intern_registry = InternRegistry(self.intern_store)
         self.router = MessageRouter(self.intern_registry.get_intern_names())
 
         # Hire flow

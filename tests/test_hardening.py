@@ -15,15 +15,22 @@ from src.orchestrator import Orchestrator, _validate_startup
 # Startup validation
 # ---------------------------------------------------------------------------
 
-_BASE_CONFIG = {
-    "jibsa": {"max_history": 20, "claude_timeout": 120, "timezone": "UTC"},
-    "llm": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
-    "approval": {
-        "approve_keywords": ["yes"],
-        "reject_keywords": ["no"],
-    },
-    "integrations": {},
-}
+def _make_config(tmp_path=None):
+    cfg = {
+        "jibsa": {"max_history": 20, "claude_timeout": 120, "timezone": "UTC"},
+        "llm": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+        "approval": {
+            "approve_keywords": ["yes"],
+            "reject_keywords": ["no"],
+        },
+        "integrations": {},
+    }
+    if tmp_path:
+        cfg["jibsa"]["intern_db_path"] = str(tmp_path / "interns.db")
+        cfg["jibsa"]["credential_db_path"] = str(tmp_path / "creds.db")
+    return cfg
+
+_BASE_CONFIG = _make_config()
 
 _REQUIRED_ENV = {
     "SLACK_BOT_TOKEN": "xoxb-test",
@@ -85,13 +92,14 @@ class TestStartupValidation:
                 _validate_startup(config)
             assert "morning_briefing" in caplog.text
 
-    def test_notion_build_failure_continues(self):
+    def test_notion_build_failure_continues(self, tmp_path):
         """Orchestrator should start even if Notion initialization fails."""
+        config = {**_make_config(tmp_path), "integrations": {"notion": {"enabled": True}}}
         with patch.dict(os.environ, _REQUIRED_ENV), \
              patch("src.orchestrator.CrewRunner") as MockRunner, \
              patch("src.orchestrator.build_second_brain", side_effect=Exception("Notion down")):
             MockRunner.return_value = MagicMock()
-            orch = Orchestrator(MagicMock(), _BASE_CONFIG)
+            orch = Orchestrator(MagicMock(), config)
             assert orch.notion is None
 
 
@@ -101,12 +109,12 @@ class TestStartupValidation:
 
 class TestMemoryEviction:
     @pytest.fixture
-    def orch(self):
+    def orch(self, tmp_path):
         with patch.dict(os.environ, _REQUIRED_ENV), \
              patch("src.orchestrator.CrewRunner") as MockRunner, \
              patch("src.orchestrator.build_second_brain", return_value=None):
             MockRunner.return_value = MagicMock()
-            o = Orchestrator(MagicMock(), _BASE_CONFIG)
+            o = Orchestrator(MagicMock(), _make_config(tmp_path))
             o._max_threads = 5
             return o
 
@@ -132,12 +140,12 @@ class TestMemoryEviction:
 
 class TestEditSessionTTL:
     @pytest.fixture
-    def orch(self):
+    def orch(self, tmp_path):
         with patch.dict(os.environ, _REQUIRED_ENV), \
              patch("src.orchestrator.CrewRunner") as MockRunner, \
              patch("src.orchestrator.build_second_brain", return_value=None):
             MockRunner.return_value = MagicMock()
-            o = Orchestrator(MagicMock(), _BASE_CONFIG)
+            o = Orchestrator(MagicMock(), _make_config(tmp_path))
             o._edit_session_ttl = 0.1  # 100ms for testing
             return o
 
@@ -324,12 +332,13 @@ class TestNotionRetry:
 
 class TestPlanExecutionCircuitBreaker:
     @pytest.fixture
-    def orch(self):
+    def orch(self, tmp_path):
+        config = {**_make_config(tmp_path), "integrations": {"notion": {"enabled": True}}}
         with patch.dict(os.environ, _REQUIRED_ENV), \
              patch("src.orchestrator.CrewRunner") as MockRunner, \
              patch("src.orchestrator.build_second_brain", return_value=MagicMock()):
             MockRunner.return_value = MagicMock()
-            o = Orchestrator(MagicMock(), _BASE_CONFIG)
+            o = Orchestrator(MagicMock(), config)
             return o
 
     def test_notion_step_uses_circuit_breaker(self, orch):

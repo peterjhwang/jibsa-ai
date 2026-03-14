@@ -135,7 +135,7 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 | Integration | Status |
 |-------------|--------|
 | **Slack** — Socket Mode bot, threaded conversations, Block Kit buttons | ✅ Live |
-| **Notion** — Schema-free PARA Second Brain (26 databases) | ✅ Live |
+| **Notion** — Schema-free PARA Second Brain (26 databases, optional) | ✅ Live |
 | **Jira** — Issue search (JQL), create/update, transitions, comments, worklogs | ✅ Live |
 | **Confluence** — Page search (CQL), create/update pages, comments | ✅ Live |
 | **CrewAI** — Multi-provider LLM orchestration (Claude, GPT-4, Gemini) | ✅ Live |
@@ -145,9 +145,9 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 | **Google Calendar** — Event management, scheduled reminders | 🔜 Phase 4 |
 | **Gmail** — Email triage, weekly digest | 🔜 Phase 4 |
 
-### Notion Second Brain
+### Notion Second Brain (Optional)
 
-Jibsa connects to your Notion workspace with a **schema-free** architecture — no hardcoded property names or database structures. Add any database by editing `config/notion_databases.yaml`:
+Notion is **not required** — Jibsa works out of the box with intern JDs and credentials stored in local SQLite. Enable Notion in `config/settings.yaml` to connect your workspace as a Second Brain with **schema-free** architecture. Add any database by editing `config/notion_databases.yaml`:
 
 ```yaml
 - name: Tasks
@@ -318,6 +318,7 @@ jibsa-ai/
 │       ├── notion_second_brain.py  # Schema-free PARA operations
 │       ├── jira_client.py          # Thin Jira wrapper (retry/backoff, execute_step)
 │       ├── confluence_client.py    # Thin Confluence wrapper (retry/backoff, execute_step)
+│       ├── intern_store.py         # SQLite backend for intern JD storage
 │       ├── credential_store.py    # Fernet-encrypted SQLite per-user credential store
 │       └── google_oauth.py        # Google OAuth2 OOB flow (per-user tokens)
 │
@@ -339,7 +340,7 @@ jibsa-ai/
 │   └── doctor.sh               # Health check (runtime, deps, env, config)
 │
 ├── data/                       # SQLite credential store (gitignored)
-├── tests/                      # pytest test suite (435 passing)
+├── tests/                      # pytest test suite (446 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
 ├── requirements.in             # Loose dependency constraints (edit this)
@@ -398,7 +399,7 @@ graph TD
 | API resilience | Circuit breaker + retry | Circuit breaker (3 failures → open) + tenacity exponential backoff on all external APIs |
 | Notion reads | Page flattening | Any page → flat key-value JSON, passed raw to LLM |
 | Notion writes | Runtime schema discovery | Auto-detect property types, no hardcoded schemas |
-| Intern storage | Notion database | JDs stored in Notion Interns DB with caching |
+| Intern storage | SQLite | JDs stored locally — no Notion dependency for core functionality |
 | Database routing | Keyword matching | Config-driven — add any Notion database without code changes |
 | Personal credentials | Fernet + SQLite | Per-user OAuth tokens encrypted at rest, keyed by Slack user ID |
 
@@ -420,7 +421,7 @@ graph TD
 ./scripts/test.sh --cov=src --cov-report=term-missing
 ```
 
-435 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 11 tools, Jira/Confluence clients, credential store, Google OAuth, connection commands, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
+446 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 11 tools, Jira/Confluence clients, credential store, Google OAuth, connection commands, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
 
 ---
 
@@ -430,7 +431,7 @@ graph TD
 - [uv](https://github.com/astral-sh/uv) (recommended) or pip
 - A [Slack app](https://api.slack.com/apps) with Socket Mode + Interactivity enabled
 - LLM API key (Anthropic, OpenAI, or Google — depending on `settings.yaml` config)
-- Notion integration token (for Second Brain + intern storage)
+- **Optional:** `NOTION_TOKEN` for Notion Second Brain integration (not needed for core functionality)
 - **Optional:** `JIRA_SERVER`, `JIRA_EMAIL`, `JIRA_API_TOKEN` for Jira + Confluence integration
 - **Optional:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` for per-user Google OAuth (Calendar + Gmail)
 - **Optional:** `CREDENTIAL_ENCRYPTION_KEY` for persistent encrypted credential storage
@@ -450,7 +451,7 @@ graph TD
 | **2.7** | New tools: Web Reader, File Gen, Image Gen, Reminders + team collaboration | ✅ Done |
 | **2.8** | UX: help, edit JD, history, Block Kit, doctor CLI, activity digest | ✅ Done |
 | **3** | Jira + Confluence, hardening (retry, shutdown, sandbox, rate limiting) | ✅ Done |
-| **3.5** | Per-user credential store (encrypted SQLite + Google OAuth) | ✅ Done |
+| **3.5** | SQLite intern storage, per-user credential store, Google OAuth | ✅ Done |
 | **4** | Google Calendar + Gmail tools + scheduled jobs (morning briefing, EOD review) | 🔜 |
 | **5** | Setup wizard, audit logging, open-source polish | 🔜 |
 

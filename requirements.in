@@ -1,0 +1,11 @@
+slack-bolt
+pyyaml
+python-dotenv
+pydantic
+notion-client
+crewai
+duckduckgo-search
+zenrows
+apscheduler
+google-genai
+tenacity

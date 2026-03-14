@@ -43,7 +43,7 @@ You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
                 └───────┬────────┘
                         │  ← you click ✅ Approve
                 ┌───────▼────────┐
-                │  ⚡ Execute    │  creates tasks in Notion, posts to Slack
+                │  ⚡ Execute    │  Notion, Jira, Confluence, Slack, etc.
                 └───────┬────────┘
                         │
                 ✅ [Alex — Content Intern] confirms completion
@@ -88,9 +88,13 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 - **Team collaboration** — `@jibsa alex, mia do X` spins up a multi-agent CrewAI crew
 
 ### Reliability & Observability
-- **Health check CLI** — `python -m src.doctor` validates config, env vars, Slack/Notion/LLM connectivity, and dependencies
+- **Startup validation** — validates required API keys and config at boot; clear error messages for missing tokens
+- **Graceful shutdown** — SIGTERM/SIGINT handlers cleanly stop Socket Mode, APScheduler, and temp file cleanup
+- **Health check CLI** — `python -m src.doctor` (or `./scripts/doctor.sh`) validates config, env vars, Slack/Notion/LLM connectivity, and dependencies
 - **Config validation** — Pydantic-validated `settings.yaml` catches typos at startup
-- **Circuit breaker** — Notion API calls use a three-state circuit breaker (CLOSED → OPEN → HALF_OPEN) to prevent cascading failures
+- **Circuit breaker** — Notion, Jira, and Confluence API calls use three-state circuit breakers (CLOSED → OPEN → HALF_OPEN) to prevent cascading failures
+- **Retry with backoff** — tenacity exponential backoff on all Notion, Jira, and Confluence API calls (retries 429/5xx errors)
+- **Memory management** — conversation history auto-evicts oldest threads (max 500); edit sessions expire after 1 hour TTL
 - **Request tracing** — every request gets a UUID, latency is logged
 - **Usage metrics** — `@jibsa stats` shows per-intern request counts, latencies, approval rates, and errors
 - **Approval history** — `@jibsa history` shows recent approved/rejected plans with timestamps
@@ -98,6 +102,8 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 - **Thinking indicator** — posts a "Thinking..." message while CrewAI reasons, then removes it
 - **Approval TTL** — pending plans auto-expire after a configurable timeout (default 1 hour)
 - **Crew timeout** — configurable `SIGALRM`-based timeout for CrewAI executions (default 5 min)
+- **Code sandbox hardening** — two-layer defence (regex + AST analysis) blocks imports, dunder access, and obfuscation tricks
+- **Web search rate limiting** — token-bucket limiter (10/min) with ZenRows SERP fallback prevents IP bans
 
 ### Rich Slack UI (Block Kit)
 - **Intern cards** — `list interns` shows per-intern cards with tools, responsibilities preview, and "View JD" buttons
@@ -110,14 +116,16 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 | Tool | Type | Description |
 |------|------|-------------|
 | **Notion** | Read + Write | Query and manage tasks, projects, notes, journals, expenses, workouts (26 databases) |
-| **Web Search** | Read-only | DuckDuckGo search — no API key required |
+| **Jira** | Read + Write | Search issues (JQL), create/update issues, transitions, comments, worklogs |
+| **Confluence** | Read + Write | Search pages (CQL), create/update pages, add comments |
+| **Web Search** | Read-only | DuckDuckGo search with ZenRows SERP fallback — rate limited |
 | **Web Reader** | Read-only | Fetch and read full web pages via [ZenRows](https://www.zenrows.com) (JS rendering, anti-bot) |
-| **Code Exec** | Read-only | Sandboxed Python execution for calculations and data processing |
+| **Code Exec** | Read-only | Sandboxed Python execution with AST-level security analysis |
 | **File Generator** | Write (approval) | Generate CSV, JSON, Markdown, or text files and upload to Slack |
 | **Image Generator** | Write (approval) | Generate AI images via Nano Banana 2 (Gemini) and upload to Slack |
 | **Reminder** | Write (approval) | Schedule timed reminders via APScheduler — posts to Slack at the specified time |
 | **Slack** | Write (approval) | Post messages to Slack channels |
-| **Calendar** | Read-only (stub) | Google Calendar integration — coming in Phase 3 |
+| **Calendar** | Read-only (stub) | Google Calendar integration — coming in Phase 4 |
 
 ### Integrations
 
@@ -125,12 +133,13 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 |-------------|--------|
 | **Slack** — Socket Mode bot, threaded conversations, Block Kit buttons | ✅ Live |
 | **Notion** — Schema-free PARA Second Brain (26 databases) | ✅ Live |
+| **Jira** — Issue search (JQL), create/update, transitions, comments, worklogs | ✅ Live |
+| **Confluence** — Page search (CQL), create/update pages, comments | ✅ Live |
 | **CrewAI** — Multi-provider LLM orchestration (Claude, GPT-4, Gemini) | ✅ Live |
 | **ZenRows** — Web page fetching with JS rendering and anti-bot bypass | ✅ Live |
 | **Nano Banana 2** — AI image generation via Google Gemini | ✅ Live |
 | **APScheduler** — Background scheduler for timed reminders | ✅ Live |
-| **Jira** — Ticket sync, morning briefing, overdue alerts | 🔜 Phase 3 |
-| **Google Calendar** — Event management, scheduled reminders | 🔜 Phase 3 |
+| **Google Calendar** — Event management, scheduled reminders | 🔜 Phase 4 |
 | **Gmail** — Email triage, weekly digest | 🔜 Phase 4 |
 
 ### Notion Second Brain
@@ -147,6 +156,23 @@ Jibsa connects to your Notion workspace with a **schema-free** architecture — 
 
 Reads use page flattening (any page to key-value JSON). Writes auto-discover property schemas at runtime.
 
+### Jira + Confluence
+
+Jibsa connects to your Atlassian Cloud instance using a single set of credentials (`JIRA_SERVER`, `JIRA_EMAIL`, `JIRA_API_TOKEN`). Enable in `config/settings.yaml`:
+
+```yaml
+integrations:
+  jira:
+    enabled: true
+  confluence:
+    enabled: true
+```
+
+**Jira actions:** `create_issue`, `update_issue`, `transition_issue`, `add_comment`, `add_worklog`
+**Confluence actions:** `create_page`, `update_page`, `add_comment`
+
+Read tools let agents search Jira (JQL) and Confluence (CQL) during reasoning. Write operations go through the standard propose-approve flow.
+
 ---
 
 ## Quick Start
@@ -156,28 +182,34 @@ Reads use page flattening (any page to key-value JSON). Writes auto-discover pro
 git clone https://github.com/peterjhwang/jibsa-ai.git
 cd jibsa-ai
 
-# 2. Create venv and install dependencies
-uv venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
+# 2. Bootstrap (installs uv, creates .venv, compiles & installs deps)
+./scripts/setup.sh
 
 # 3. Configure
-cp .env.example .env
-# Edit .env with your Slack tokens and Notion token
-
-cp config/notion_databases.yaml.example config/notion_databases.yaml
-# Edit with your Notion database IDs
+#    Edit .env with your Slack tokens, LLM API key, and Notion token
+#    Edit config/notion_databases.yaml with your Notion database IDs
 
 # 4. Verify setup
-python -m src.doctor
-# Checks config, env vars, Slack/Notion/LLM connectivity
+./scripts/doctor.sh
+# Checks runtime, deps, env vars, and config validation
 
 # 5. Run
-python -m src.app
+./scripts/run.sh
 
 # 6. Talk to Jibsa
 # Go to #jibsa in Slack and say: "help" or "hire a content marketing intern"
 ```
+
+### Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `./scripts/setup.sh` | Full bootstrap: install uv, create `.venv`, compile + install deps |
+| `./scripts/compile.sh` | Compile `requirements.in` → pinned `requirements.txt` |
+| `./scripts/install.sh` | Install from pinned `requirements.txt` (add `--dev` for test deps) |
+| `./scripts/run.sh` | Start Jibsa (Socket Mode) |
+| `./scripts/test.sh` | Run pytest (pass any pytest args) |
+| `./scripts/doctor.sh` | Health check: uv, .venv, deps, env vars, config |
 
 ### With Docker
 
@@ -239,7 +271,7 @@ Secrets go in `.env` (never committed).
 ```
 jibsa-ai/
 ├── src/
-│   ├── app.py                  # Slack Bolt entry point (Socket Mode + Block Kit actions)
+│   ├── app.py                  # Slack Bolt entry point (Socket Mode + graceful shutdown)
 │   ├── orchestrator.py         # Central router: messages → interns → CrewAI → approval
 │   ├── crew_runner.py          # CrewAI Agent/Task/Crew builder (primary engine)
 │   ├── router.py               # Message parsing, intern routing, team detection
@@ -255,18 +287,22 @@ jibsa-ai/
 │   ├── models/
 │   │   └── intern.py           # InternJD dataclass (validation, channel-scoped memory)
 │   ├── tools/
-│   │   ├── notion_read_tool.py # CrewAI BaseTool: Notion queries
-│   │   ├── web_search_tool.py  # CrewAI BaseTool: DuckDuckGo search
-│   │   ├── web_reader_tool.py  # CrewAI BaseTool: ZenRows page fetcher
-│   │   ├── code_exec_tool.py   # CrewAI BaseTool: sandboxed Python
-│   │   ├── file_gen_tool.py    # CrewAI BaseTool: CSV/JSON/MD/TXT generator
-│   │   ├── image_gen_tool.py   # CrewAI BaseTool: Nano Banana 2 image generation
-│   │   ├── reminder_tool.py    # CrewAI BaseTool: scheduled reminders
-│   │   ├── slack_tool.py       # CrewAI BaseTool: Slack post (write, needs approval)
-│   │   └── calendar_tool.py    # CrewAI BaseTool: Calendar stub (Phase 3)
+│   │   ├── notion_read_tool.py     # CrewAI BaseTool: Notion queries
+│   │   ├── jira_read_tool.py       # CrewAI BaseTool: Jira issue search (JQL)
+│   │   ├── confluence_read_tool.py # CrewAI BaseTool: Confluence page search (CQL)
+│   │   ├── web_search_tool.py      # CrewAI BaseTool: DuckDuckGo + ZenRows fallback
+│   │   ├── web_reader_tool.py      # CrewAI BaseTool: ZenRows page fetcher
+│   │   ├── code_exec_tool.py       # CrewAI BaseTool: sandboxed Python (regex + AST)
+│   │   ├── file_gen_tool.py        # CrewAI BaseTool: CSV/JSON/MD/TXT generator
+│   │   ├── image_gen_tool.py       # CrewAI BaseTool: Nano Banana 2 image generation
+│   │   ├── reminder_tool.py        # CrewAI BaseTool: scheduled reminders
+│   │   ├── slack_tool.py           # CrewAI BaseTool: Slack post (write, needs approval)
+│   │   └── calendar_tool.py        # CrewAI BaseTool: Calendar stub (Phase 4)
 │   └── integrations/
-│       ├── notion_client.py    # Thin Notion SDK wrapper
-│       └── notion_second_brain.py  # Schema-free PARA operations
+│       ├── notion_client.py        # Thin Notion SDK wrapper (retry/backoff)
+│       ├── notion_second_brain.py  # Schema-free PARA operations
+│       ├── jira_client.py          # Thin Jira wrapper (retry/backoff, execute_step)
+│       └── confluence_client.py    # Thin Confluence wrapper (retry/backoff, execute_step)
 │
 ├── config/
 │   ├── settings.yaml           # LLM, channel, timezone, approval, integrations
@@ -277,9 +313,19 @@ jibsa-ai/
 │       ├── intern.txt          # Intern system prompt template
 │       └── hire.txt            # Hire flow prompt
 │
-├── tests/                      # pytest test suite (293 passing)
+├── scripts/
+│   ├── setup.sh                # Full bootstrap (uv, .venv, compile, install)
+│   ├── compile.sh              # requirements.in → requirements.txt
+│   ├── install.sh              # Install pinned deps into .venv
+│   ├── run.sh                  # Start Jibsa
+│   ├── test.sh                 # Run pytest
+│   └── doctor.sh               # Health check (runtime, deps, env, config)
+│
+├── tests/                      # pytest test suite (409 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
+├── requirements.in             # Loose dependency constraints (edit this)
+├── requirements.txt            # Pinned lockfile (auto-generated)
 ├── Dockerfile
 ├── docker-compose.yml
 └── .env.example
@@ -306,12 +352,12 @@ graph TD
 
     CrewRunner -->|"Agent + Task + Crew"| CrewAI["CrewAI\n(Claude / GPT-4 / Gemini)"]
 
-    CrewAI -->|tool call| Tools["Tools\nNotion · Web Search · Web Reader\nCode Exec · File Gen · Image Gen"]
+    CrewAI -->|tool call| Tools["Tools\nNotion · Jira · Confluence\nWeb Search · Web Reader\nCode Exec · File Gen · Image Gen"]
     CrewAI -->|ambiguous| Clarify["Clarify\nAsk user for details"]
     Clarify -->|user replies| CrewAI
     CrewAI -->|action plan| Approval["approval.py\nBlock Kit ✅ / ❌"]
 
-    Approval -->|approved| Execute["Execute Plan\nNotion writes · Slack posts\nFile uploads · Image gen · Reminders"]
+    Approval -->|approved| Execute["Execute Plan\nNotion · Jira · Confluence\nSlack · Files · Images · Reminders"]
     Approval -->|rejected| User
 
     Tools -->|read results| CrewAI
@@ -331,7 +377,7 @@ graph TD
 | Approval gate | Block Kit buttons + text | Interactive ✅/❌ buttons with text fallback, auto-expiring TTL |
 | Tool isolation | Per-intern filtering | Each intern only accesses tools listed in their JD |
 | Config validation | Pydantic | Catches typos and invalid values at startup, not runtime |
-| API resilience | Circuit breaker | Prevents cascading failures from flaky external APIs |
+| API resilience | Circuit breaker + retry | Circuit breaker (3 failures → open) + tenacity exponential backoff on all external APIs |
 | Notion reads | Page flattening | Any page → flat key-value JSON, passed raw to LLM |
 | Notion writes | Runtime schema discovery | Auto-detect property types, no hardcoded schemas |
 | Intern storage | Notion database | JDs stored in Notion Interns DB with caching |
@@ -343,16 +389,19 @@ graph TD
 
 ```bash
 # Run all tests
-.venv/bin/python -m pytest tests/ -v
+./scripts/test.sh
 
 # Run a specific test file
-.venv/bin/python -m pytest tests/test_orchestrator.py -v
+./scripts/test.sh -k "test_jira"
+
+# Stop on first failure
+./scripts/test.sh -x
 
 # Run with coverage
-.venv/bin/python -m pytest tests/ --cov=src --cov-report=term-missing
+./scripts/test.sh --cov=src --cov-report=term-missing
 ```
 
-293 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 9 tools, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breaker, metrics, scheduler, doctor CLI.
+409 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 11 tools, Jira/Confluence clients, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
 
 ---
 
@@ -363,7 +412,8 @@ graph TD
 - A [Slack app](https://api.slack.com/apps) with Socket Mode + Interactivity enabled
 - LLM API key (Anthropic, OpenAI, or Google — depending on `settings.yaml` config)
 - Notion integration token (for Second Brain + intern storage)
-- **Optional:** `ZENROWS_API_KEY` for the Web Reader tool
+- **Optional:** `JIRA_SERVER`, `JIRA_EMAIL`, `JIRA_API_TOKEN` for Jira + Confluence integration
+- **Optional:** `ZENROWS_API_KEY` for the Web Reader tool and web search fallback
 - **Optional:** `GOOGLE_API_KEY` for Nano Banana 2 image generation (also used if your LLM provider is Google)
 
 ---
@@ -378,8 +428,8 @@ graph TD
 | **2.6** | Reliability (config validation, circuit breaker, metrics, approval TTL) | ✅ Done |
 | **2.7** | New tools: Web Reader, File Gen, Image Gen, Reminders + team collaboration | ✅ Done |
 | **2.8** | UX: help, edit JD, history, Block Kit, doctor CLI, activity digest | ✅ Done |
-| **3** | Jira + Google Calendar + scheduled jobs (morning briefing, EOD review) | 🔜 |
-| **4** | Gmail + weekly digest | 🔜 |
+| **3** | Jira + Confluence integration, hardening (retry, shutdown, sandbox, rate limiting) | ✅ Done |
+| **4** | Google Calendar + Gmail + scheduled jobs (morning briefing, EOD review) | 🔜 |
 | **5** | Setup wizard, audit logging, open-source polish | 🔜 |
 
 ## License

@@ -3,14 +3,41 @@ NotionClient — thin wrapper around the official notion-client SDK.
 
 Knows nothing about Jibsa's domain. Translates SDK exceptions
 into a single local NotionAPIError so callers are insulated from SDK internals.
+
+All public methods use tenacity retry with exponential backoff for transient
+failures (rate limits, server errors). Non-retryable errors propagate immediately.
 """
 import logging
 from typing import Any
 
 from notion_client import Client
 from notion_client.errors import APIResponseError
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+    before_sleep_log,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Return True for transient Notion API errors worth retrying."""
+    if isinstance(exc, APIResponseError):
+        # 429 = rate limit, 500+ = server errors, 502/503/504 = gateway errors
+        return exc.status in (429, 500, 502, 503, 504)
+    return False
+
+
+_notion_retry = retry(
+    retry=retry_if_exception(_is_retryable),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
 
 
 class NotionAPIError(Exception):
@@ -25,6 +52,7 @@ class NotionClient:
     def __init__(self, token: str):
         self._client = Client(auth=token)
 
+    @_notion_retry
     def query_database(
         self,
         database_id: str,
@@ -52,6 +80,7 @@ class NotionClient:
             logger.error("query_database FAILED db=%s: %s", database_id, e)
             raise NotionAPIError("query_database", e) from e
 
+    @_notion_retry
     def create_page(
         self,
         database_id: str,
@@ -74,6 +103,7 @@ class NotionClient:
             logger.error("create_page FAILED db=%s: %s", database_id, e)
             raise NotionAPIError("create_page", e) from e
 
+    @_notion_retry
     def update_page(self, page_id: str, properties: dict) -> dict:
         """Update properties on an existing page."""
         logger.debug("update_page → id=%s props=%s", page_id, list(properties.keys()))
@@ -85,6 +115,7 @@ class NotionClient:
             logger.error("update_page FAILED id=%s: %s", page_id, e)
             raise NotionAPIError("update_page", e) from e
 
+    @_notion_retry
     def search_pages(
         self,
         query: str,
@@ -103,6 +134,7 @@ class NotionClient:
         except APIResponseError as e:
             raise NotionAPIError("search_pages", e) from e
 
+    @_notion_retry
     def get_page(self, page_id: str) -> dict:
         """Retrieve a single page by ID."""
         try:
@@ -110,6 +142,7 @@ class NotionClient:
         except APIResponseError as e:
             raise NotionAPIError("get_page", e) from e
 
+    @_notion_retry
     def get_database_schema(self, database_id: str) -> dict:
         """Return the properties dict (name → type info) for a database."""
         try:
@@ -118,6 +151,7 @@ class NotionClient:
         except APIResponseError as e:
             raise NotionAPIError("get_database_schema", e) from e
 
+    @_notion_retry
     def create_database(self, parent_page_id: str, title: str, properties: dict) -> dict:
         """Create a database under a page. Returns the database object."""
         logger.debug("create_database → parent=%s title=%s", parent_page_id, title)
@@ -133,6 +167,7 @@ class NotionClient:
             logger.error("create_database FAILED: %s", e)
             raise NotionAPIError("create_database", e) from e
 
+    @_notion_retry
     def create_page_under_page(
         self,
         parent_page_id: str,
@@ -157,6 +192,7 @@ class NotionClient:
             logger.error("create_page_under_page FAILED: %s", e)
             raise NotionAPIError("create_page_under_page", e) from e
 
+    @_notion_retry
     def list_child_blocks(self, block_id: str, block_type: str | None = None) -> list[dict]:
         """List child blocks of a block/page, optionally filtered by type. Handles pagination."""
         logger.debug("list_child_blocks → block=%s type=%s", block_id, block_type)
@@ -180,6 +216,7 @@ class NotionClient:
             logger.error("list_child_blocks FAILED: %s", e)
             raise NotionAPIError("list_child_blocks", e) from e
 
+    @_notion_retry
     def append_blocks(self, block_id: str, children: list[dict]) -> dict:
         """Append content blocks to a page or block."""
         logger.debug("append_blocks → block=%s (%d children)", block_id, len(children))

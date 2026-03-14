@@ -102,11 +102,74 @@ def _parse_reminder_time(when: str, timezone: str = "UTC"):
     return None
 
 
+_PROVIDER_KEY_MAP = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google": "GOOGLE_API_KEY",
+}
+
+# Integrations that have no implementation yet
+_UNIMPLEMENTED_INTEGRATIONS = {"jira", "google_calendar", "gmail"}
+
+
+def _validate_startup(config: dict) -> None:
+    """Validate required env vars and config at startup. Raises on critical issues."""
+    # 1. Slack tokens
+    if not os.environ.get("SLACK_BOT_TOKEN"):
+        raise EnvironmentError(
+            "SLACK_BOT_TOKEN is not set. Add it to your .env file."
+        )
+
+    # 2. LLM provider API key
+    provider = config.get("llm", {}).get("provider", "anthropic")
+    env_key = _PROVIDER_KEY_MAP.get(provider)
+    if env_key and not os.environ.get(env_key):
+        raise EnvironmentError(
+            f"LLM provider is '{provider}' but {env_key} is not set. "
+            f"Add it to your .env file or change llm.provider in settings.yaml."
+        )
+
+    # 3. Notion token (if Notion integration is enabled)
+    if config.get("integrations", {}).get("notion", {}).get("enabled", False):
+        if not os.environ.get("NOTION_TOKEN"):
+            logger.warning(
+                "Notion integration is enabled but NOTION_TOKEN is not set — "
+                "Notion features will be unavailable."
+            )
+
+    # 4. Warn about unimplemented integrations
+    for name in _UNIMPLEMENTED_INTEGRATIONS:
+        if config.get("integrations", {}).get(name, {}).get("enabled", False):
+            logger.warning(
+                "Integration '%s' is enabled in settings.yaml but not yet implemented "
+                "(Phase 3+). It will be ignored.",
+                name,
+            )
+
+    # 5. Warn about enabled scheduler jobs with no implementation
+    for job_name, job_cfg in config.get("scheduler", {}).items():
+        if isinstance(job_cfg, dict) and job_cfg.get("enabled", False):
+            if job_name != "weekly_digest":  # weekly_digest is implemented
+                logger.warning(
+                    "Scheduler job '%s' is enabled but not yet implemented. "
+                    "It will be ignored.",
+                    job_name,
+                )
+
+
 class Orchestrator:
     def __init__(self, slack_client: Any, config: dict):
+        _validate_startup(config)
+
         self.slack = slack_client
         self.config = config
-        self.notion = build_second_brain(config)
+
+        try:
+            self.notion = build_second_brain(config)
+        except Exception:
+            logger.warning("Failed to initialize Notion Second Brain — continuing without it", exc_info=True)
+            self.notion = None
+
         self.approval = ApprovalManager(config)
 
         # Reminder scheduler
@@ -132,7 +195,9 @@ class Orchestrator:
         self.hire_flow = HireFlowManager(self.runner, self.intern_registry, self.tool_registry)
 
         self._history: dict[str, list[dict]] = {}
+        self._history_ts: dict[str, float] = {}  # thread_ts → last access time
         self._max_history: int = config.get("jibsa", {}).get("max_history", 20)
+        self._max_threads: int = 500  # max threads to keep in memory
 
         # Track which intern is active per thread (for approval context)
         self._thread_intern: dict[str, str | None] = {}
@@ -143,8 +208,9 @@ class Orchestrator:
         # Approval history (completed/rejected plans)
         self._approval_history: list[dict] = []
 
-        # Edit JD sessions: thread_ts → intern_name being edited
-        self._edit_sessions: dict[str, str] = {}
+        # Edit JD sessions: thread_ts → (intern_name, created_time)
+        self._edit_sessions: dict[str, tuple[str, float]] = {}
+        self._edit_session_ttl: float = 3600.0  # 1 hour TTL
 
         # Register activity summary scheduler
         self._register_activity_summary()
@@ -262,6 +328,9 @@ class Orchestrator:
         text: str,
     ) -> None:
         """Internal dispatch — separated for tracing wrapper."""
+        # Periodic cleanup of expired edit sessions
+        self._cleanup_edit_sessions()
+
         # Priority 0.5: Active edit session
         if thread_ts in self._edit_sessions:
             self._handle_edit_response(channel, thread_ts, user, text)
@@ -607,7 +676,7 @@ class Orchestrator:
             )
             return
 
-        self._edit_sessions[thread_ts] = intern.name.lower()
+        self._edit_sessions[thread_ts] = (intern.name.lower(), time.time())
 
         blocks = [
             {
@@ -643,7 +712,8 @@ class Orchestrator:
 
     def _handle_edit_response(self, channel: str, thread_ts: str, user: str, text: str) -> None:
         """Process an edit instruction for an active edit session."""
-        intern_name = self._edit_sessions.get(thread_ts, "")
+        session = self._edit_sessions.get(thread_ts)
+        intern_name = session[0] if session else ""
         text_lower = text.lower().strip()
 
         if text_lower in ("done", "cancel", "exit", "quit", "nevermind"):
@@ -1162,7 +1232,15 @@ class Orchestrator:
             if intern and not self.tool_registry.can_execute(intern, service, step.get("action", "")):
                 result = {"ok": False, "error": f"'{intern.name}' lacks permission for {service}/{step.get('action')}"}
             elif service == "notion" and self.notion:
-                result = self.notion.execute_step(step)
+                try:
+                    self._notion_circuit.check()
+                    result = self.notion.execute_step(step)
+                    self._notion_circuit.record_success()
+                except CircuitOpenError:
+                    result = {"ok": False, "error": "Notion is temporarily unavailable (circuit open). Try again later."}
+                except Exception as e:
+                    self._notion_circuit.record_failure()
+                    result = {"ok": False, "error": f"Notion error: {e}"}
             elif service == "slack":
                 result = self._execute_slack_step(step)
             elif service == "file_gen":
@@ -1427,14 +1505,40 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _get_history(self, thread_ts: str) -> list[dict]:
+        self._history_ts[thread_ts] = time.time()
         return list(self._history.get(thread_ts, []))
 
     def _add_to_history(self, thread_ts: str, role: str, content: str) -> None:
         if thread_ts not in self._history:
             self._history[thread_ts] = []
         self._history[thread_ts].append({"role": role, "content": content})
+        self._history_ts[thread_ts] = time.time()
         if len(self._history[thread_ts]) > self._max_history:
             self._history[thread_ts] = self._history[thread_ts][-self._max_history:]
+        # Evict oldest threads if over limit
+        if len(self._history) > self._max_threads:
+            self._evict_old_threads()
+
+    def _evict_old_threads(self) -> None:
+        """Remove oldest threads to keep memory bounded."""
+        sorted_threads = sorted(self._history_ts.items(), key=lambda x: x[1])
+        to_remove = len(self._history) - self._max_threads
+        for ts, _ in sorted_threads[:to_remove]:
+            self._history.pop(ts, None)
+            self._history_ts.pop(ts, None)
+            self._thread_intern.pop(ts, None)
+        logger.debug("Evicted %d old threads from history", to_remove)
+
+    def _cleanup_edit_sessions(self) -> None:
+        """Remove expired edit sessions."""
+        now = time.time()
+        expired = [
+            ts for ts, (_, created) in self._edit_sessions.items()
+            if now - created > self._edit_session_ttl
+        ]
+        for ts in expired:
+            self._edit_sessions.pop(ts, None)
+            logger.debug("Expired edit session for thread %s", ts)
 
     # ------------------------------------------------------------------
     # Helpers

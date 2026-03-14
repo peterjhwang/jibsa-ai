@@ -8,8 +8,12 @@ Usage:
     python -m src.app
     # or via Docker
 """
+import atexit
 import logging
 import os
+import signal
+import sys
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -103,16 +107,46 @@ def create_app(config: dict) -> tuple[App, Orchestrator]:
     return slack_app, orchestrator
 
 
+def _cleanup_temp_files() -> None:
+    """Remove leftover jibsa temp dirs on exit."""
+    tmp = Path(tempfile.gettempdir())
+    for d in tmp.glob("jibsa_*"):
+        try:
+            if d.is_dir():
+                import shutil
+                shutil.rmtree(d, ignore_errors=True)
+            elif d.is_file():
+                d.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def main():
     config = load_config()
-    slack_app, _ = create_app(config)
+    slack_app, orchestrator = create_app(config)
 
     app_token = os.environ.get("SLACK_APP_TOKEN")
     if not app_token:
         raise EnvironmentError("SLACK_APP_TOKEN is not set. Check your .env file.")
 
-    logger.info("Starting Jibsa (Socket Mode)...")
     handler = SocketModeHandler(slack_app, app_token)
+
+    def _shutdown(sig, frame):
+        signame = signal.Signals(sig).name
+        logger.info("Received %s — shutting down gracefully...", signame)
+        orchestrator.reminder_scheduler.shutdown()
+        handler.close()
+        _cleanup_temp_files()
+        logger.info("Shutdown complete.")
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    # Also clean up temp files on normal exit
+    atexit.register(_cleanup_temp_files)
+
+    logger.info("Starting Jibsa (Socket Mode)...")
     handler.start()
 
 

@@ -2,7 +2,13 @@
 CodeExecTool — CrewAI tool for sandboxed Python code execution.
 
 Runs Python code in a subprocess with timeout and safety checks.
+
+Security: Two-layer defence:
+  1. Regex patterns catch common dangerous calls (fast, first pass).
+  2. AST analysis catches obfuscation (unicode escapes, compile(), attribute
+     introspection) that regex alone would miss.
 """
+import ast
 import re
 import subprocess
 import tempfile
@@ -33,7 +39,71 @@ BLOCKED_PATTERNS: list[tuple[str, str]] = [
     (r"\burllib\b", "network access"),
     (r"\brequests\b", "network access"),
     (r"\bhttpx\b", "network access"),
+    (r"\bcompile\s*\(", "compile calls"),
+    (r"\bglobals\s*\(", "globals access"),
+    (r"\blocals\s*\(", "locals access"),
+    (r"\bbreakpoint\s*\(", "debugger access"),
+    (r"\b__subclasses__\b", "class introspection"),
+    (r"\b__bases__\b", "class introspection"),
+    (r"\b__mro__\b", "class introspection"),
+    (r"\bctypes\b", "ctypes access"),
+    (r"\bsignal\b", "signal module access"),
 ]
+
+# Blocked module names in import statements (AST-level check)
+BLOCKED_MODULES = frozenset({
+    "os", "sys", "subprocess", "shutil", "importlib", "ctypes", "signal",
+    "socket", "urllib", "http", "requests", "httpx", "pathlib", "io",
+    "builtins", "code", "codeop", "compileall", "py_compile",
+    "multiprocessing", "threading", "concurrent", "_thread",
+})
+
+# Blocked function names when called directly
+BLOCKED_CALLS = frozenset({
+    "eval", "exec", "compile", "open", "breakpoint",
+    "__import__", "globals", "locals", "getattr", "setattr", "delattr",
+    "vars", "dir", "type", "memoryview",
+})
+
+# Blocked dunder attributes
+BLOCKED_ATTRS = frozenset({
+    "__import__", "__builtins__", "__subclasses__", "__bases__", "__mro__",
+    "__globals__", "__code__", "__class__", "__dict__",
+})
+
+
+def _ast_check(code: str) -> str | None:
+    """Parse code as AST and check for unsafe patterns. Returns reason or None."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None  # let subprocess report the syntax error
+
+    for node in ast.walk(tree):
+        # Block dangerous imports
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [alias.name.split(".")[0] for alias in node.names]
+            elif node.module:
+                names = [node.module.split(".")[0]]
+            for name in names:
+                if name in BLOCKED_MODULES:
+                    return f"import of '{name}' module"
+
+        # Block dangerous function calls
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in BLOCKED_CALLS:
+                return f"call to '{func.id}()'"
+            if isinstance(func, ast.Attribute) and func.attr in BLOCKED_CALLS:
+                return f"call to '.{func.attr}()'"
+
+        # Block access to dangerous dunder attributes
+        if isinstance(node, ast.Attribute) and node.attr in BLOCKED_ATTRS:
+            return f"access to '{node.attr}'"
+
+    return None
 
 
 class CodeExecInput(BaseModel):
@@ -65,11 +135,17 @@ class CodeExecTool(BaseTool):
         )
 
     def _run(self, code: str) -> str:
-        # Safety check — regex-based for robustness
+        # Layer 1: Regex-based blocking (fast, catches plain-text patterns)
         for pattern, reason in BLOCKED_PATTERNS:
             if re.search(pattern, code):
                 return f"Blocked: {reason} are not allowed for safety."
 
+        # Layer 2: AST-based blocking (catches obfuscation, unicode escapes, etc.)
+        ast_reason = _ast_check(code)
+        if ast_reason:
+            return f"Blocked: {ast_reason} is not allowed for safety."
+
+        temp_path = None
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
                 f.write(code)
@@ -83,8 +159,6 @@ class CodeExecTool(BaseTool):
                 cwd=tempfile.gettempdir(),
             )
 
-            Path(temp_path).unlink(missing_ok=True)
-
             stdout = result.stdout[:self.max_output_chars] if result.stdout else ""
             stderr = result.stderr[:self.max_output_chars] if result.stderr else ""
 
@@ -97,7 +171,9 @@ class CodeExecTool(BaseTool):
             return output or "(no output)"
 
         except subprocess.TimeoutExpired:
-            Path(temp_path).unlink(missing_ok=True)
             return f"Code timed out after {self.timeout} seconds."
         except Exception as e:
             return f"Execution error: {e}"
+        finally:
+            if temp_path:
+                Path(temp_path).unlink(missing_ok=True)

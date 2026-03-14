@@ -8,3 +8,4 @@ duckduckgo-search>=8.0.0
 zenrows>=1.4.0
 apscheduler>=3.11.0
 google-genai>=1.52.0
+tenacity>=8.2.0,<10.0.0

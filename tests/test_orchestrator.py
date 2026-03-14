@@ -1,4 +1,5 @@
 """Tests for Orchestrator routing and approval flow."""
+import os
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -14,6 +15,12 @@ CONFIG = {
     "integrations": {},
 }
 
+# Env vars required for startup validation
+_REQUIRED_ENV = {
+    "SLACK_BOT_TOKEN": "xoxb-test-token",
+    "ANTHROPIC_API_KEY": "sk-ant-test-key",
+}
+
 
 @pytest.fixture
 def mock_slack():
@@ -25,7 +32,8 @@ def mock_slack():
 
 @pytest.fixture
 def orchestrator(mock_slack):
-    with patch("src.orchestrator.CrewRunner") as MockRunner, \
+    with patch.dict(os.environ, _REQUIRED_ENV), \
+         patch("src.orchestrator.CrewRunner") as MockRunner, \
          patch("src.orchestrator.build_second_brain", return_value=None):
         mock_runner = MagicMock()
         MockRunner.return_value = mock_runner
@@ -361,7 +369,7 @@ def test_edit_starts_session(orchestrator, mock_slack):
 
     orchestrator.handle_message("C123", "ts-edit", "U001", "edit alex's jd")
     assert "ts-edit" in orchestrator._edit_sessions
-    assert orchestrator._edit_sessions["ts-edit"] == "alex"
+    assert orchestrator._edit_sessions["ts-edit"][0] == "alex"
 
 
 def test_edit_unknown_intern(orchestrator, mock_slack):

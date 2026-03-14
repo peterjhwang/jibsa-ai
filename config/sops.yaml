@@ -1,0 +1,157 @@
+# Seed SOPs — loaded on startup if present.
+# Add your own SOPs here or use Slack commands: @jibsa add sop
+#
+# SOPs are procedural templates that activate when trigger keywords match
+# a message. They inject structured steps into CrewAI Tasks, giving interns
+# a consistent procedure to follow. Shared SOPs (intern_id: null) apply
+# to all interns; set intern_id to an intern name for scoped SOPs.
+
+sops:
+  # ── Reporting ──────────────────────────────────────────────────────
+  - name: weekly-report
+    intern_id: null
+    trigger_keywords: [weekly, report, summary, recap, week]
+    description: >
+      Generate a weekly summary report covering completed tasks,
+      in-progress work, blockers, and next week's plan.
+    steps:
+      - Query Notion Tasks DB for items completed in the past 7 days
+      - Query Notion Tasks DB for items still in progress
+      - Identify blockers from in-progress items
+      - Draft a summary with sections: Done, In Progress, Blocked, Next Week
+      - Format as a clean Slack message with section headers
+    expected_output: >
+      A formatted weekly report with 4 sections: Done, In Progress,
+      Blocked, and Next Week.
+    tools_required: [notion]
+    approval_required: false
+    priority: 10
+
+  - name: daily-standup
+    intern_id: null
+    trigger_keywords: [standup, daily, today, yesterday, blocker]
+    description: >
+      Compile a daily standup update from recent activity.
+    steps:
+      - Check Notion tasks completed since yesterday
+      - Check Notion tasks currently in progress
+      - Identify any blockers or overdue items
+      - Format as a standup update: Yesterday, Today, Blockers
+    expected_output: >
+      A concise standup update with three sections: What was done,
+      What's planned, and any blockers.
+    tools_required: [notion]
+    approval_required: false
+    priority: 8
+
+  # ── Content ────────────────────────────────────────────────────────
+  - name: content-review
+    intern_id: null
+    trigger_keywords: [review, content, draft, feedback, edit, proofread]
+    description: >
+      Review a piece of content (blog post, social media copy, email)
+      and provide structured feedback.
+    steps:
+      - Read the provided content carefully
+      - Check for clarity, tone consistency, and grammar
+      - Identify areas for improvement
+      - Provide specific, actionable feedback with examples
+      - Suggest a revised version if appropriate
+    expected_output: >
+      Structured feedback with specific suggestions and an optional
+      revised version.
+    tools_required: []
+    approval_required: false
+    priority: 5
+
+  - name: linkedin-post
+    intern_id: null
+    trigger_keywords: [linkedin, post, social, publish]
+    description: >
+      Draft a LinkedIn post on a given topic with engagement hooks.
+    steps:
+      - Research the topic using web search for current trends and data
+      - Draft a LinkedIn post (150-300 words) with a strong opening hook
+      - Include a call-to-action or question for engagement
+      - Add 3-5 relevant hashtags
+      - Format with line breaks for mobile readability
+    expected_output: >
+      A ready-to-publish LinkedIn post with hook, body, CTA, and hashtags.
+    tools_required: [web_search]
+    approval_required: true
+    priority: 5
+
+  # ── Research ───────────────────────────────────────────────────────
+  - name: competitor-research
+    intern_id: null
+    trigger_keywords: [competitor, research, analysis, benchmark, compare]
+    description: >
+      Research a competitor and compile a structured analysis.
+    steps:
+      - Search the web for the competitor's recent news, product updates, and pricing
+      - Check their social media presence and content strategy
+      - Identify their key differentiators and weaknesses
+      - Compare against our product/service where applicable
+      - Compile findings into a structured brief
+    expected_output: >
+      A competitor analysis brief with sections: Overview, Recent News,
+      Product/Pricing, Strengths, Weaknesses, and Key Takeaways.
+    tools_required: [web_search, web_reader]
+    approval_required: false
+    priority: 5
+
+  # ── Jira / Project Management ──────────────────────────────────────
+  - name: ticket-triage
+    intern_id: null
+    trigger_keywords: [triage, tickets, issues, backlog, prioritize]
+    description: >
+      Triage open Jira tickets by priority and category.
+    steps:
+      - Search Jira for open/unresolved issues in the specified project
+      - Categorize tickets by type (bug, feature, task, improvement)
+      - Sort by priority and staleness (days since last update)
+      - Identify any critical/blocker issues that need immediate attention
+      - Present a summary with recommended next actions
+    expected_output: >
+      A prioritized ticket triage with categories, critical items flagged,
+      and recommended next actions.
+    tools_required: [jira]
+    approval_required: false
+    priority: 5
+
+  - name: sprint-summary
+    intern_id: null
+    trigger_keywords: [sprint, velocity, burndown, iteration]
+    description: >
+      Summarize the current or last sprint's progress from Jira.
+    steps:
+      - Query Jira for issues in the current/last sprint
+      - Count completed vs remaining story points or issues
+      - List completed items with brief descriptions
+      - Identify carry-over items and reasons
+      - Calculate completion rate and flag any concerns
+    expected_output: >
+      A sprint summary with completion stats, completed items,
+      carry-overs, and a health assessment.
+    tools_required: [jira]
+    approval_required: false
+    priority: 5
+
+  # ── Meeting / Notes ────────────────────────────────────────────────
+  - name: meeting-notes
+    intern_id: null
+    trigger_keywords: [meeting, notes, minutes, action, items, decisions]
+    description: >
+      Process meeting notes into structured action items and decisions.
+    steps:
+      - Parse the provided meeting notes or transcript
+      - Extract key decisions made during the meeting
+      - Identify action items with owners and deadlines
+      - Summarize discussion points by topic
+      - Format as a structured meeting summary
+    expected_output: >
+      A structured meeting summary with sections: Attendees, Decisions,
+      Action Items (with owners/deadlines), and Discussion Summary.
+    tools_required: []
+    approval_required: false
+    priority: 8

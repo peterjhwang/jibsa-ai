@@ -22,6 +22,7 @@ from .approval import ApprovalManager, ApprovalState
 from .circuit_breaker import CircuitBreaker, CircuitOpenError
 from .crew_runner import CrewRunner
 from .hire_flow import HireFlowManager
+from .sop_flow import SOPFlowManager
 from .metrics import MetricsTracker
 from .intern_registry import InternRegistry
 from .integrations.audit_store import AuditStore
@@ -46,7 +47,9 @@ from .tools.jira_read_tool import JiraReadTool
 from .tools.confluence_read_tool import ConfluenceReadTool
 from .scheduler import ReminderScheduler
 from .integrations.credential_store import CredentialStore
+from .integrations.sop_store import SOPStore
 from .integrations.google_oauth import GoogleOAuthManager
+from .sop_registry import SOPRegistry
 from .context import current_user_id
 
 logger = logging.getLogger(__name__)
@@ -221,8 +224,20 @@ class Orchestrator:
         self.intern_registry = InternRegistry(self.intern_store)
         self.router = MessageRouter(self.intern_registry.get_intern_names())
 
+        # SOP management (SQLite-backed, same DB)
+        self.sop_store = SOPStore(db_path=intern_db_path)
+        self.sop_registry = SOPRegistry(self.sop_store)
+
+        # Seed SOPs from YAML if present
+        sop_yaml = _CONFIG_DIR / "sops.yaml"
+        if sop_yaml.exists():
+            SOPRegistry.seed_from_yaml(self.sop_store, str(sop_yaml))
+
         # Hire flow
         self.hire_flow = HireFlowManager(self.runner, self.intern_registry, self.tool_registry)
+
+        # SOP creation flow
+        self.sop_flow = SOPFlowManager(self.runner, self.sop_registry, self.tool_registry)
 
         self._history: dict[str, list[dict]] = {}
         self._history_ts: dict[str, float] = {}  # thread_ts → last access time
@@ -625,6 +640,12 @@ class Orchestrator:
             self.router.update_names(self.intern_registry.get_intern_names())
             return
 
+        # Priority 1.5: Active SOP creation session
+        if self.sop_flow.has_session(thread_ts):
+            response = self.sop_flow.handle(thread_ts, user, text)
+            self._post(channel, thread_ts, response)
+            return
+
         # Priority 2: Pending approval
         ctx = self.approval.get(thread_ts)
         if ctx.state == ApprovalState.PENDING:
@@ -663,6 +684,17 @@ class Orchestrator:
         if cmd.startswith("disconnect ") and not route.intern_name:
             service = cmd[11:].strip()
             self._handle_disconnect(channel, thread_ts, user, service)
+            return
+
+        # SOP commands
+        if (cmd.startswith("add sop") or cmd.startswith("create sop")) and not route.intern_name:
+            self._handle_add_sop(channel, thread_ts, user, route.message)
+            return
+        if (cmd.startswith("show sop") or cmd.startswith("list sop")) and not route.intern_name:
+            self._handle_list_sops(channel, thread_ts, route.message)
+            return
+        if (cmd.startswith("remove sop") or cmd.startswith("delete sop")) and not route.intern_name:
+            self._handle_remove_sop(channel, thread_ts, route.message)
             return
 
         # Help with target: "help alex"
@@ -940,6 +972,20 @@ class Orchestrator:
                         "`ask <name> to <request>` — Ask a specific intern\n"
                         "`form team <name1>, <name2> to <task>` — Multi-intern collaboration\n"
                         "Or just talk to me directly — I'll handle it as the orchestrator."
+                    ),
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*SOPs (Standard Operating Procedures)*\n"
+                        "`add sop` — Create a shared SOP\n"
+                        "`add sop for <name>` — Create an intern-specific SOP\n"
+                        "`show sops` — List all SOPs\n"
+                        "`show sop <name>` — View SOP details\n"
+                        "`remove sop <name>` — Delete a SOP"
                     ),
                 },
             },
@@ -1412,6 +1458,120 @@ class Orchestrator:
             return ""
 
     # ------------------------------------------------------------------
+    # SOP management commands
+    # ------------------------------------------------------------------
+
+    def _handle_add_sop(self, channel: str, thread_ts: str, user: str, text: str) -> None:
+        """Start a conversational SOP creation flow."""
+        # Parse: "add sop for <intern>" or "add sop" (shared)
+        msg_lower = text.lower()
+        intern_name = None
+
+        # Extract intern name from "add sop for alex" or "create sop for alex"
+        for prefix in ("add sop for ", "create sop for "):
+            if msg_lower.startswith(prefix):
+                intern_name = text[len(prefix):].strip()
+                if intern_name and not self.intern_registry.get_intern(intern_name):
+                    self._post(
+                        channel, thread_ts,
+                        f"No intern named '{intern_name}'. "
+                        f"Available: {', '.join(self.intern_registry.get_intern_names()) or 'none'}",
+                    )
+                    return
+                break
+
+        self.sop_flow.start_session(thread_ts, user, text, intern_name=intern_name)
+        scope = f"for *{intern_name}*" if intern_name else "(shared, available to all interns)"
+        self._post(
+            channel, thread_ts,
+            f"Let's create a new SOP {scope}. "
+            f"What should this SOP do? Give me a name and description to get started.",
+        )
+
+    def _handle_list_sops(self, channel: str, thread_ts: str, text: str) -> None:
+        """List SOPs — all, for an intern, or show a specific SOP."""
+        msg_lower = text.lower().strip()
+
+        # "show sop <name>" — single SOP detail
+        for prefix in ("show sop ", "list sop "):
+            if msg_lower.startswith(prefix):
+                remainder = text[len(prefix):].strip()
+
+                # "show sops for alex"
+                if remainder.lower().startswith("for "):
+                    intern_name = remainder[4:].strip()
+                    sops = self.sop_registry.list_sops_for_intern(intern_name)
+                    if not sops:
+                        self._post(channel, thread_ts, f"No SOPs found for '{intern_name}'.")
+                        return
+                    self._post_sop_list(channel, thread_ts, sops, f"SOPs for {intern_name}")
+                    return
+
+                # Try as SOP name
+                if remainder.lower() not in ("", "s"):
+                    sop_name = remainder.rstrip("s")  # handle "show sops"
+                    sop = self.sop_registry.get_sop_by_name(sop_name)
+                    if not sop:
+                        # Try intern-scoped
+                        for intern in self.intern_registry.list_interns():
+                            sop = self.sop_registry.get_sop_by_name(sop_name, intern.name)
+                            if sop:
+                                break
+                    if sop:
+                        self._post(channel, thread_ts, sop.format_sop())
+                        return
+                    self._post(channel, thread_ts, f"No SOP named '{sop_name}' found.")
+                    return
+
+        # Default: list all SOPs
+        sops = self.sop_registry.list_all_sops()
+        if not sops:
+            self._post(channel, thread_ts, "No SOPs yet. Say `add sop` to create one.")
+            return
+        self._post_sop_list(channel, thread_ts, sops, "All SOPs")
+
+    def _handle_remove_sop(self, channel: str, thread_ts: str, text: str) -> None:
+        """Remove a SOP by name."""
+        for prefix in ("remove sop ", "delete sop "):
+            if text.lower().startswith(prefix):
+                sop_name = text[len(prefix):].strip()
+                break
+        else:
+            self._post(channel, thread_ts, "Usage: `remove sop <name>`")
+            return
+
+        # Find the SOP — try shared first, then intern-scoped
+        sop = self.sop_registry.get_sop_by_name(sop_name)
+        if not sop:
+            for intern in self.intern_registry.list_interns():
+                sop = self.sop_registry.get_sop_by_name(sop_name, intern.name)
+                if sop:
+                    break
+
+        if not sop:
+            self._post(channel, thread_ts, f"No SOP named '{sop_name}' found.")
+            return
+
+        result = self.sop_registry.delete_sop(sop.id)
+        if result.get("ok"):
+            self._post(channel, thread_ts, f"✅ SOP '{sop_name}' removed.")
+        else:
+            self._post(channel, thread_ts, f"⚠️ Failed to remove SOP: {result.get('error')}")
+
+    def _post_sop_list(self, channel: str, thread_ts: str, sops: list, title: str) -> None:
+        """Post a formatted list of SOPs."""
+        lines = [f"*{title}* ({len(sops)} total)\n"]
+        for sop in sops:
+            scope = f"_{sop.intern_id}_" if sop.intern_id else "_shared_"
+            keywords = ", ".join(sop.trigger_keywords[:5])
+            lines.append(
+                f"  `{sop.name}` ({scope}) — {keywords}"
+                f"{' ...' if len(sop.trigger_keywords) > 5 else ''}"
+            )
+        lines.append(f"\nSay `show sop <name>` for details.")
+        self._post(channel, thread_ts, "\n".join(lines))
+
+    # ------------------------------------------------------------------
     # Intern request handling (CrewAI)
     # ------------------------------------------------------------------
 
@@ -1449,20 +1609,48 @@ class Orchestrator:
         # Memory context
         memory_context = intern.get_memory_context(channel=channel)
 
+        # SOP resolution — find matching SOP for this intern + message
+        sop = self.sop_registry.resolve_sops(intern.name, text)
+        if sop:
+            # Validate SOP tools vs intern's allowed tools
+            missing_tools = [t for t in sop.tools_required if t not in intern.tools_allowed]
+            if missing_tools:
+                logger.warning(
+                    "SOP '%s' requires tools %s not in intern '%s' — falling back to freeform",
+                    sop.name, missing_tools, intern.name,
+                )
+                sop = None
+            else:
+                logger.info("Using SOP '%s' for intern '%s'", sop.name, intern.name)
+
         thinking_ts = self._post_thinking(channel, thread_ts)
 
         start = time.monotonic()
-        response = self.runner.run_for_intern(
-            user_message=text,
-            intern_name=intern.name,
-            intern_role=intern.role,
-            intern_backstory=backstory,
-            tools=crewai_tools,
-            notion_context=notion_context,
-            history=history,
-            memory_context=memory_context,
-            active_integrations=active,
-        )
+        if sop:
+            response = self.runner.run_for_intern_with_sop(
+                user_message=text,
+                intern_name=intern.name,
+                intern_role=intern.role,
+                intern_backstory=backstory,
+                sop=sop,
+                tools=crewai_tools,
+                notion_context=notion_context,
+                history=history,
+                memory_context=memory_context,
+                active_integrations=active,
+            )
+        else:
+            response = self.runner.run_for_intern(
+                user_message=text,
+                intern_name=intern.name,
+                intern_role=intern.role,
+                intern_backstory=backstory,
+                tools=crewai_tools,
+                notion_context=notion_context,
+                history=history,
+                memory_context=memory_context,
+                active_integrations=active,
+            )
         latency = time.monotonic() - start
 
         is_plan = isinstance(response, dict) and response.get("type") == "action_plan"

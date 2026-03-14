@@ -136,6 +136,7 @@ def main():
         logger.info("Received %s — shutting down gracefully...", signame)
         orchestrator.audit.close()
         orchestrator.intern_store.close()
+        orchestrator.sop_store.close()
         orchestrator.credential_store.close()
         orchestrator.reminder_scheduler.shutdown()
         handler.close()

@@ -127,9 +127,8 @@ class CrewRunner:
 
         return self._run_crew(agent, user_message)
 
-    def run_for_intern(
+    def _build_intern_agent(
         self,
-        user_message: str,
         intern_name: str,
         intern_role: str,
         intern_backstory: str,
@@ -138,8 +137,8 @@ class CrewRunner:
         history: list[dict] | None = None,
         memory_context: str = "",
         active_integrations: list[str] | None = None,
-    ) -> dict | str:
-        """Run a request as a specific intern."""
+    ) -> Agent:
+        """Build a CrewAI Agent from intern parameters."""
         tz = self.config.get("jibsa", {}).get("timezone", "UTC")
         now = datetime.now()
 
@@ -165,7 +164,7 @@ class CrewRunner:
             f"{memory_section}"
         )
 
-        agent = Agent(
+        return Agent(
             role=f"{intern_name} — {intern_role}",
             goal=(
                 f"Complete tasks as {intern_name}, a {intern_role}. "
@@ -183,7 +182,136 @@ class CrewRunner:
             max_iter=self._max_iter,
         )
 
+    def run_for_intern(
+        self,
+        user_message: str,
+        intern_name: str,
+        intern_role: str,
+        intern_backstory: str,
+        tools: list | None = None,
+        notion_context: str = "",
+        history: list[dict] | None = None,
+        memory_context: str = "",
+        active_integrations: list[str] | None = None,
+    ) -> dict | str:
+        """Run a request as a specific intern."""
+        agent = self._build_intern_agent(
+            intern_name, intern_role, intern_backstory,
+            tools, notion_context, history, memory_context, active_integrations,
+        )
         return self._run_crew(agent, user_message)
+
+    def run_for_intern_with_sop(
+        self,
+        user_message: str,
+        intern_name: str,
+        intern_role: str,
+        intern_backstory: str,
+        sop: Any,
+        tools: list | None = None,
+        notion_context: str = "",
+        history: list[dict] | None = None,
+        memory_context: str = "",
+        active_integrations: list[str] | None = None,
+    ) -> dict | str:
+        """Run a request as a specific intern using an SOP template."""
+        agent = self._build_intern_agent(
+            intern_name, intern_role, intern_backstory,
+            tools, notion_context, history, memory_context, active_integrations,
+        )
+
+        task = Task(
+            description=sop.build_task_description(user_message),
+            expected_output=sop.build_expected_output(),
+            agent=agent,
+        )
+
+        crew = Crew(
+            agents=[agent],
+            tasks=[task],
+            process=Process.sequential,
+            verbose=False,
+            memory=True,
+        )
+
+        try:
+            result = self._run_with_timeout(crew)
+            output = str(result.raw) if hasattr(result, "raw") else str(result)
+        except TimeoutError:
+            logger.error("SOP crew timed out after %ds", self._crew_timeout)
+            return f"⚠️ Request timed out after {self._crew_timeout}s."
+        except Exception as e:
+            logger.error("SOP crew failed: %s", e)
+            return f"⚠️ SOP execution failed: {e}"
+
+        parsed = _extract_json(output)
+        if parsed and parsed.get("type") == "action_plan":
+            return parsed
+
+        return output
+
+    def run_for_sop_creation(
+        self,
+        user_message: str,
+        available_tools: str,
+        intern_name: str | None = None,
+        history: list[dict] | None = None,
+    ) -> str:
+        """Run a SOP creation conversation. Always returns str."""
+        history_text = self._format_history(history)
+        now = datetime.now()
+        scope = f"for intern '{intern_name}'" if intern_name else "shared (available to all interns)"
+
+        agent = Agent(
+            role="Jibsa — SOP Creation Assistant",
+            goal=(
+                "Help the user create a new Standard Operating Procedure (SOP). "
+                "When you have enough information, output ONLY a JSON object with type: sop."
+            ),
+            backstory=(
+                f"You are Jibsa (집사), helping create a new SOP ({scope}).\n\n"
+                f"Required SOP fields:\n"
+                f"- name: kebab-case identifier (e.g. 'weekly-report')\n"
+                f"- trigger_keywords: list of words that trigger this SOP\n"
+                f"- description: what this SOP does\n"
+                f"- steps: ordered list of procedure steps\n"
+                f"- expected_output: what the result should look like\n"
+                f"- tools_required: from [{available_tools}] (can be empty)\n"
+                f"- approval_required: true/false (default true)\n"
+                f"- priority: 0-100 (higher = matched first, default 0)\n\n"
+                f"Ask clarifying questions naturally. When complete, output JSON:\n"
+                f'{{"type": "sop", "name": "...", "trigger_keywords": [...], '
+                f'"description": "...", "steps": [...], "expected_output": "...", '
+                f'"tools_required": [...], "approval_required": true, "priority": 0}}\n\n'
+                f"Today: {now.strftime('%A, %B %d, %Y')}\n\n"
+                f"Conversation so far:\n{history_text}"
+            ),
+            tools=[],
+            llm=self._llm_string,
+            verbose=False,
+            memory=False,
+            max_iter=5,
+        )
+
+        task = Task(
+            description=user_message,
+            expected_output="Either clarifying questions or a complete sop JSON",
+            agent=agent,
+        )
+
+        crew = Crew(
+            agents=[agent],
+            tasks=[task],
+            process=Process.sequential,
+            verbose=False,
+        )
+
+        try:
+            result = crew.kickoff()
+            return str(result.raw) if hasattr(result, "raw") else str(result)
+        except Exception as e:
+            logger.error("SOP creation crew failed: %s", e)
+            return f"⚠️ Something went wrong: {e}"
 
     def run_for_hire(
         self,

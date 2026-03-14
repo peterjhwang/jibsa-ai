@@ -68,6 +68,11 @@ You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
 | `@jibsa stats` | Usage metrics dashboard with recent actions |
 | `@jibsa history` | Approval history (approved/rejected plans) |
 | `@jibsa reminders` | List pending scheduled reminders |
+| `@jibsa add sop` | Create a shared SOP (conversational flow) |
+| `@jibsa add sop for alex` | Create an intern-specific SOP |
+| `@jibsa show sops` | List all SOPs |
+| `@jibsa show sop weekly-report` | View a specific SOP's details |
+| `@jibsa remove sop weekly-report` | Delete a SOP |
 | `@jibsa connect google` | Start per-user Google OAuth flow (DM-based) |
 | `@jibsa disconnect google` | Revoke and delete stored Google tokens |
 | `@jibsa my connections` | List your connected services |
@@ -80,6 +85,47 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 | Approve | Reject / Revise |
 |---------|-----------------|
 | `✅`, `yes`, `approved`, `go`, `go ahead`, `do it`, `proceed` | `❌`, `no`, `cancel`, `stop`, `revise`, `change` |
+
+### SOPs — Consistent Procedures
+
+SOPs (Standard Operating Procedures) are reusable procedure templates that activate automatically when trigger keywords match a message. They inject structured steps into the CrewAI Task, ensuring interns follow a consistent process.
+
+```
+You:  "@jibsa alex give me the weekly report"
+                        │
+                ┌───────▼────────┐
+                │  🔀 Router     │  routes to Alex
+                └───────┬────────┘
+                        │
+                ┌───────▼────────┐
+                │  📋 SOP Match  │  "weekly-report" SOP matched (keywords: weekly, report)
+                └───────┬────────┘
+                        │
+                ┌───────▼────────┐
+                │  🤖 CrewAI     │  Task now includes numbered SOP steps:
+                └───────┬────────┘  1. Query completed tasks
+                        │           2. Query in-progress tasks
+                        │           3. Identify blockers
+                        │           4. Draft summary
+                        │           5. Format as Slack message
+                ┌───────▼────────┐
+                │  📊 Response   │  structured report, every time
+                └────────────────┘
+```
+
+Jibsa ships with **9 pre-built SOPs** in `config/sops.yaml` — or create your own:
+
+```
+@jibsa add sop                    → create a shared SOP (all interns)
+@jibsa add sop for alex           → create an SOP scoped to Alex
+@jibsa show sops                  → list all SOPs
+@jibsa show sop weekly-report     → view SOP details
+@jibsa remove sop weekly-report   → delete a SOP
+```
+
+When no SOP matches, the intern handles the request freeform (existing behaviour preserved).
+
+---
 
 ## Use Cases
 
@@ -161,6 +207,15 @@ The Metrics Reporter gathers data from Notion, Jira, and your integrations, calc
 - **Channel-scoped memory** — interns remember past interactions, isolated per Slack channel (capped at 20 entries each)
 - **Smart routing** — `@jibsa alex do X`, `@jibsa ask alex to X`, name prefix, etc.
 - **Team collaboration** — `@jibsa alex, mia do X` spins up a multi-agent CrewAI crew
+
+### SOPs (Standard Operating Procedures)
+- **Procedural templates** — define step-by-step procedures that interns follow when specific keywords are detected in messages
+- **Keyword-based resolution** — SOPs activate automatically via trigger keyword matching, scored by overlap count + priority
+- **Shared or intern-scoped** — create SOPs that apply to all interns (shared) or only a specific intern
+- **9 pre-built SOPs** — weekly report, daily standup, content review, LinkedIn post, competitor research, ticket triage, sprint summary, meeting notes — seed from `config/sops.yaml`
+- **Conversational creation** — `add sop` starts a guided flow to build a new SOP through natural conversation
+- **CrewAI integration** — matched SOPs inject structured Task descriptions with numbered steps and expected outputs into CrewAI, giving interns a consistent procedure to follow
+- **Additive, not breaking** — when no SOP matches, interns fall back to freeform task handling (existing behaviour preserved)
 
 ### Reliability & Observability
 - **Startup validation** — validates required API keys and config at boot; clear error messages for missing tokens
@@ -249,7 +304,7 @@ integrations:
 **Jira actions:** `create_issue`, `update_issue`, `transition_issue`, `add_comment`, `add_worklog`
 **Confluence actions:** `create_page`, `update_page`, `add_comment`
 
-Read tools let agents search Jira (JQL) and Confluence (CQL) during reasoning. Write operations go through the standard propose-approve flow.
+Read tools let agents search Jira (JQL) and Confluence (CQL) during reasoning. Write operations go through the standard propose-approve flow. Pre-built SOPs like `ticket-triage` and `sprint-summary` provide structured procedures for common Jira workflows.
 
 ### Per-User Credentials (Google OAuth)
 
@@ -332,6 +387,7 @@ All behaviour is controlled via YAML files in `config/`:
 |------|---------|
 | `settings.yaml` | LLM provider, channel, timezone, approval keywords, integrations |
 | `persona.yaml` | Jibsa's name, tone, and personality |
+| `sops.yaml` | SOP seed templates (loaded on startup) |
 | `notion_databases.yaml` | Notion database IDs and keyword routing (gitignored) |
 | `prompts/system.txt` | Jibsa orchestrator system prompt |
 | `prompts/intern.txt` | Intern-specific system prompt template |
@@ -368,7 +424,9 @@ jibsa-ai/
 │   ├── crew_runner.py          # CrewAI Agent/Task/Crew builder (primary engine)
 │   ├── router.py               # Message parsing, intern routing, team detection
 │   ├── hire_flow.py            # Conversational JD creation flow
-│   ├── intern_registry.py      # CRUD for interns (Notion-backed, cached)
+│   ├── sop_flow.py             # Conversational SOP creation flow
+│   ├── sop_registry.py         # SOP CRUD + keyword-based resolution
+│   ├── intern_registry.py      # CRUD for interns (SQLite-backed)
 │   ├── tool_registry.py        # Tool catalog + per-intern permission checking
 │   ├── approval.py             # ApprovalState machine per Slack thread (with TTL)
 │   ├── config_schema.py        # Pydantic validation for settings.yaml
@@ -379,7 +437,8 @@ jibsa-ai/
 │   ├── scheduler.py            # APScheduler wrapper (SQLite-backed persistence)
 │   ├── setup.py                # Interactive setup wizard CLI
 │   ├── models/
-│   │   └── intern.py           # InternJD dataclass (validation, channel-scoped memory)
+│   │   ├── intern.py           # InternJD dataclass (validation, channel-scoped memory)
+│   │   └── sop.py              # SOP dataclass (validation, CrewAI task builder)
 │   ├── tools/
 │   │   ├── notion_read_tool.py     # CrewAI BaseTool: Notion queries
 │   │   ├── jira_read_tool.py       # CrewAI BaseTool: Jira issue search (JQL)
@@ -401,6 +460,7 @@ jibsa-ai/
 │       ├── confluence_client.py    # Thin Confluence wrapper (retry/backoff, execute_step)
 │       ├── audit_store.py          # Persistent audit logging (SQLite)
 │       ├── intern_store.py         # SQLite backend for intern JD storage
+│       ├── sop_store.py           # SQLite backend for SOP storage
 │       ├── credential_store.py    # Fernet-encrypted SQLite per-user credential store
 │       ├── google_oauth.py        # Google OAuth2 OOB flow (per-user tokens)
 │       ├── google_calendar_client.py  # Google Calendar API v3 wrapper
@@ -410,6 +470,7 @@ jibsa-ai/
 ├── config/
 │   ├── settings.yaml           # LLM, channel, timezone, approval, integrations
 │   ├── persona.yaml            # Jibsa's personality
+│   ├── sops.yaml              # SOP seed templates (loaded on startup)
 │   ├── notion_databases.yaml   # Notion DB mappings (gitignored)
 │   └── prompts/
 │       ├── system.txt          # Jibsa orchestrator prompt
@@ -426,7 +487,7 @@ jibsa-ai/
 │   └── doctor.sh               # Health check (runtime, deps, env, config)
 │
 ├── data/                       # SQLite credential store (gitignored)
-├── tests/                      # pytest test suite (505 passing)
+├── tests/                      # pytest test suite (612 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
 ├── requirements.in             # Loose dependency constraints (edit this)
@@ -451,12 +512,16 @@ graph TD
     App --> Router["router.py<br/>Parse & Route"]
 
     Router -->|hire request| HireFlow["hire_flow.py<br/>JD Builder"]
+    Router -->|add sop| SOPFlow["sop_flow.py<br/>SOP Builder"]
     Router -->|intern task| Orchestrator["orchestrator.py<br/>Orchestrator"]
     Router -->|management cmd| Orchestrator
 
-    HireFlow -->|JD complete| Registry["intern_registry.py<br/>Notion-backed"]
+    HireFlow -->|JD complete| Registry["intern_registry.py<br/>SQLite-backed"]
+    SOPFlow -->|SOP complete| SOPRegistry["sop_registry.py<br/>SOP Store"]
 
-    Orchestrator --> CrewRunner["crew_runner.py<br/>CrewAI Engine"]
+    Orchestrator --> SOPResolve["sop_registry.py<br/>Keyword Match"]
+    SOPResolve -->|SOP matched| CrewRunner["crew_runner.py<br/>CrewAI Engine"]
+    SOPResolve -->|no match| CrewRunner
 
     CrewRunner -->|"Agent + Task + Crew"| CrewAI["CrewAI<br/>(Claude / GPT-4 / Gemini)"]
 
@@ -490,6 +555,7 @@ graph TD
 | Notion writes | Runtime schema discovery | Auto-detect property types, no hardcoded schemas |
 | Intern storage | SQLite | JDs stored locally — no Notion dependency for core functionality |
 | Database routing | Keyword matching | Config-driven — add any Notion database without code changes |
+| SOPs | Keyword → CrewAI Task | SOPs inject structured steps into Task descriptions; keyword scoring + priority for resolution |
 | Personal credentials | Fernet + SQLite | Per-user OAuth tokens encrypted at rest, keyed by Slack user ID |
 
 ---
@@ -510,7 +576,7 @@ graph TD
 ./scripts/test.sh --cov=src --cov-report=term-missing
 ```
 
-505 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 14 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
+612 tests covering: routing, approval, CrewAI runner, hire flow, SOP store, SOP model, SOP registry, SOP creation flow, intern model, tool registry, all 14 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
 
 ---
 

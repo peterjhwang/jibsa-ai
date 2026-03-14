@@ -225,3 +225,32 @@ def test_history_command_routes_to_management(router):
     result = router.route("history")
     assert result.intern_name is None
     assert result.message == "history"
+
+
+# ---------------------------------------------------------------------------
+# SOP commands
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "add sop", "add sop for alex", "create sop", "create sop for mia",
+])
+def test_sop_add_routes_to_jibsa(router, text):
+    result = router.route(text)
+    assert result.intern_name is None
+    assert result.is_hire is False
+
+
+@pytest.mark.parametrize("text", [
+    "show sops", "show sop weekly-report", "list sops", "list sops for alex",
+])
+def test_sop_show_routes_to_jibsa(router, text):
+    result = router.route(text)
+    assert result.intern_name is None
+
+
+@pytest.mark.parametrize("text", [
+    "remove sop weekly-report", "delete sop weekly-report",
+])
+def test_sop_remove_routes_to_jibsa(router, text):
+    result = router.route(text)
+    assert result.intern_name is None

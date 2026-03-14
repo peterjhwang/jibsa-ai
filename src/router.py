@@ -99,6 +99,14 @@ class MessageRouter:
         if cleaned_lower.startswith("show ") or cleaned_lower.startswith("fire "):
             return RouteResult(intern_name=None, message=cleaned)
 
+        # SOP commands
+        if cleaned_lower.startswith("add sop") or cleaned_lower.startswith("create sop"):
+            return RouteResult(intern_name=None, message=cleaned)
+        if cleaned_lower.startswith("show sop") or cleaned_lower.startswith("list sop"):
+            return RouteResult(intern_name=None, message=cleaned)
+        if cleaned_lower.startswith("remove sop") or cleaned_lower.startswith("delete sop"):
+            return RouteResult(intern_name=None, message=cleaned)
+
         # Edit JD: "edit alex's jd", "edit alex"
         if cleaned_lower.startswith("edit "):
             return RouteResult(intern_name=None, message=cleaned)

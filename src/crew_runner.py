@@ -342,7 +342,7 @@ class CrewRunner:
                 "AND the request is clear enough to act on, respond with ONLY a JSON action plan:\n"
                 '{"type": "action_plan", "summary": "...", "steps": [{"service": "...", '
                 '"action": "...", "params": {...}, "description": "..."}], "needs_approval": true}\n\n'
-                "Valid services: notion, jira, confluence, web_search, code_exec\n"
+                "Valid services: notion, jira, confluence, calendar, gmail, slack, web_search, code_exec\n"
                 "Valid notion actions: create_task, update_task_status, create_project, create_note, "
                 "create_journal_entry, log_expense, log_workout, create_database, create_entry, "
                 "create_standalone_page, add_page_content\n\n"

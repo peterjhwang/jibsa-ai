@@ -128,7 +128,8 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 | **Image Generator** | Write (approval) | Generate AI images via Nano Banana 2 (Gemini) and upload to Slack |
 | **Reminder** | Write (approval) | Schedule timed reminders via APScheduler — posts to Slack at the specified time |
 | **Slack** | Write (approval) | Post messages to Slack channels |
-| **Calendar** | Read-only (stub) | Google Calendar integration — coming in Phase 4 |
+| **Calendar** | Read + Write | View, create, update, delete Google Calendar events (per-user OAuth) |
+| **Gmail** | Read + Write | Search, read, send, reply, draft emails (per-user OAuth) |
 
 ### Integrations
 
@@ -142,8 +143,9 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 | **ZenRows** — Web page fetching with JS rendering and anti-bot bypass | ✅ Live |
 | **Nano Banana 2** — AI image generation via Google Gemini | ✅ Live |
 | **APScheduler** — Background scheduler for timed reminders | ✅ Live |
-| **Google Calendar** — Event management, scheduled reminders | 🔜 Phase 4 |
-| **Gmail** — Email triage, weekly digest | 🔜 Phase 4 |
+| **Google Calendar** — Per-user OAuth, event management, daily briefings | ✅ Live |
+| **Gmail** — Per-user OAuth, read/send/reply, drafts | ✅ Live |
+| **Scheduled Jobs** — Morning briefing, EOD review, weekly digest | ✅ Live |
 
 ### Notion Second Brain (Optional)
 
@@ -312,7 +314,8 @@ jibsa-ai/
 │   │   ├── image_gen_tool.py       # CrewAI BaseTool: Nano Banana 2 image generation
 │   │   ├── reminder_tool.py        # CrewAI BaseTool: scheduled reminders
 │   │   ├── slack_tool.py           # CrewAI BaseTool: Slack post (write, needs approval)
-│   │   └── calendar_tool.py        # CrewAI BaseTool: Calendar stub (Phase 4)
+│   │   ├── calendar_tool.py       # CrewAI BaseTool: Google Calendar (per-user OAuth)
+│   │   └── gmail_tool.py          # CrewAI BaseTool: Gmail (per-user OAuth)
 │   └── integrations/
 │       ├── notion_client.py        # Thin Notion SDK wrapper (retry/backoff)
 │       ├── notion_second_brain.py  # Schema-free PARA operations
@@ -320,7 +323,9 @@ jibsa-ai/
 │       ├── confluence_client.py    # Thin Confluence wrapper (retry/backoff, execute_step)
 │       ├── intern_store.py         # SQLite backend for intern JD storage
 │       ├── credential_store.py    # Fernet-encrypted SQLite per-user credential store
-│       └── google_oauth.py        # Google OAuth2 OOB flow (per-user tokens)
+│       ├── google_oauth.py        # Google OAuth2 OOB flow (per-user tokens)
+│       ├── google_calendar_client.py  # Google Calendar API v3 wrapper
+│       └── gmail_client.py        # Gmail API v1 wrapper
 │
 ├── config/
 │   ├── settings.yaml           # LLM, channel, timezone, approval, integrations
@@ -340,7 +345,7 @@ jibsa-ai/
 │   └── doctor.sh               # Health check (runtime, deps, env, config)
 │
 ├── data/                       # SQLite credential store (gitignored)
-├── tests/                      # pytest test suite (446 passing)
+├── tests/                      # pytest test suite (463 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
 ├── requirements.in             # Loose dependency constraints (edit this)
@@ -421,7 +426,7 @@ graph TD
 ./scripts/test.sh --cov=src --cov-report=term-missing
 ```
 
-446 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 11 tools, Jira/Confluence clients, credential store, Google OAuth, connection commands, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
+463 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 13 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
 
 ---
 
@@ -452,7 +457,7 @@ graph TD
 | **2.8** | UX: help, edit JD, history, Block Kit, doctor CLI, activity digest | ✅ Done |
 | **3** | Jira + Confluence, hardening (retry, shutdown, sandbox, rate limiting) | ✅ Done |
 | **3.5** | SQLite intern storage, per-user credential store, Google OAuth | ✅ Done |
-| **4** | Google Calendar + Gmail tools + scheduled jobs (morning briefing, EOD review) | 🔜 |
+| **4** | Google Calendar + Gmail (per-user OAuth), morning briefing, EOD review | ✅ Done |
 | **5** | Setup wizard, audit logging, open-source polish | 🔜 |
 
 ## License

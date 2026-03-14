@@ -1,52 +1,118 @@
 """
-CalendarTool — CrewAI tool stub for Google Calendar integration.
+CalendarReadTool — CrewAI tool for reading Google Calendar events.
 
-This is a placeholder for Phase 3. Currently returns helpful messages
-explaining the feature is coming soon.
+Uses per-user OAuth credentials via the current_user_id ContextVar.
+Write operations (create/update/delete) go through the propose-approve flow.
 """
-from typing import Type
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Type
 
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from ..context import current_user_id
 
-class CalendarInput(BaseModel):
+if TYPE_CHECKING:
+    from ..integrations.google_oauth import GoogleOAuthManager
+
+logger = logging.getLogger(__name__)
+
+
+class CalendarQueryInput(BaseModel):
     """Input schema for calendar queries."""
-    query: str = Field(..., description="What to look up or schedule (e.g. 'my meetings today', 'schedule a call Thursday 2pm')")
+    query: str = Field(
+        ...,
+        description=(
+            "What to look up (e.g. 'my meetings today', 'this week', "
+            "'meetings with John', 'schedule a call Thursday 2pm')"
+        ),
+    )
 
 
-class CalendarTool(BaseTool):
+class CalendarReadTool(BaseTool):
     name: str = "Google Calendar"
     description: str = (
-        "Check your schedule, list upcoming events, or propose new calendar entries. "
-        "Note: This integration is in preview — read operations show sample data, "
-        "write operations will be available in a future update."
+        "Check your Google Calendar — view today's events, upcoming schedule, "
+        "or search for specific events. To create, update, or delete events, "
+        "propose an action plan instead. Requires the user to have connected Google."
     )
-    args_schema: Type[BaseModel] = CalendarInput
+    args_schema: Type[BaseModel] = CalendarQueryInput
+    google_oauth: object = None
+    timezone: str = "UTC"
 
     def _run(self, query: str) -> str:
-        query_lower = query.lower()
+        user_id = current_user_id.get()
+        if not user_id:
+            return "Could not determine the requesting user."
 
-        # Detect read vs write intent
-        write_keywords = ("schedule", "create", "add", "book", "set up", "move", "cancel", "reschedule")
-        is_write = any(kw in query_lower for kw in write_keywords)
+        if not self.google_oauth:
+            return "Google Calendar is not configured."
 
-        if is_write:
+        creds = self.google_oauth.get_valid_credentials(user_id)
+        if not creds:
             return (
-                "Calendar write operations (create/update/delete events) are coming in Phase 3. "
-                "For now, I can only tell you about the calendar integration roadmap:\n"
-                "- Google Calendar read access (view events, check availability)\n"
-                "- Event creation with approval flow\n"
-                "- Morning briefing with today's schedule\n\n"
-                "To schedule something now, you could create a Notion task with a due date instead."
+                "You haven't connected Google yet. "
+                "Say `connect google` to link your account."
             )
 
-        return (
-            "Google Calendar integration is coming in Phase 3. "
-            "Once connected, I'll be able to:\n"
-            "- Show your upcoming meetings and events\n"
-            "- Check your availability for scheduling\n"
-            "- Create calendar events (with approval)\n"
-            "- Send morning briefings with your daily schedule\n\n"
-            "For now, check your calendar app directly, or ask me to create a Notion task with a due date."
-        )
+        try:
+            from ..integrations.google_calendar_client import GoogleCalendarClient
+            client = GoogleCalendarClient(creds)
+
+            query_lower = query.lower()
+
+            # Route by intent
+            if any(kw in query_lower for kw in ("today", "today's", "today's")):
+                events = client.list_today_events(self.timezone)
+                return self._format_events(events, "Today's events")
+
+            if any(kw in query_lower for kw in ("week", "upcoming", "next", "coming up")):
+                events = client.list_upcoming_events(days=7, timezone=self.timezone)
+                return self._format_events(events, "Upcoming events (7 days)")
+
+            if any(kw in query_lower for kw in ("tomorrow",)):
+                events = client.list_upcoming_events(days=2, timezone=self.timezone)
+                return self._format_events(events, "Events in the next 2 days")
+
+            # Default: search
+            events = client.search_events(query, timezone=self.timezone)
+            return self._format_events(events, f"Events matching '{query}'")
+
+        except Exception as e:
+            logger.warning("Calendar query failed for user %s: %s", user_id, e)
+            return f"Calendar query failed: {e}"
+
+    @staticmethod
+    def _format_events(events: list[dict], header: str) -> str:
+        if not events:
+            return f"{header}: No events found."
+
+        lines = [f"*{header}* ({len(events)} events):\n"]
+        for event in events:
+            summary = event.get("summary", "(no title)")
+            start = event.get("start", {})
+            start_time = start.get("dateTime", start.get("date", ""))
+            # Simplify display
+            if "T" in start_time:
+                start_time = start_time.split("T")[1][:5]  # HH:MM
+            end = event.get("end", {})
+            end_time = end.get("dateTime", end.get("date", ""))
+            if "T" in end_time:
+                end_time = end_time.split("T")[1][:5]
+
+            time_str = f"{start_time}–{end_time}" if start_time != end_time else start_time
+            location = event.get("location", "")
+            loc_str = f" | {location}" if location else ""
+
+            lines.append(f"  - {time_str} {summary}{loc_str}")
+
+        return "\n".join(lines)
+
+    @classmethod
+    def create(cls, google_oauth: GoogleOAuthManager, timezone: str = "UTC") -> CalendarReadTool:
+        tool = cls()
+        tool.google_oauth = google_oauth
+        tool.timezone = timezone
+        return tool

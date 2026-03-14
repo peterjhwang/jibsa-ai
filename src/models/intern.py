@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 REQUIRED_JD_FIELDS = ("name", "role", "responsibilities")
 
 # Valid tool names that can be assigned to interns
-VALID_TOOL_NAMES = {"notion", "web_search", "code_exec", "slack", "calendar", "file_gen", "image_gen", "reminder", "web_reader", "jira", "confluence"}
+VALID_TOOL_NAMES = {"notion", "web_search", "code_exec", "slack", "calendar", "gmail", "file_gen", "image_gen", "reminder", "web_reader", "jira", "confluence"}
 
 
 @dataclass

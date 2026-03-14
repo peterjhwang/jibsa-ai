@@ -13,8 +13,10 @@ import logging
 import os
 import time
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .approval import ApprovalManager, ApprovalState
 from .circuit_breaker import CircuitBreaker, CircuitOpenError
@@ -31,7 +33,8 @@ from .tools.notion_read_tool import NotionReadTool
 from .tools.web_search_tool import WebSearchTool
 from .tools.code_exec_tool import CodeExecTool
 from .tools.slack_tool import SlackTool
-from .tools.calendar_tool import CalendarTool
+from .tools.calendar_tool import CalendarReadTool
+from .tools.gmail_tool import GmailReadTool
 from .tools.file_gen_tool import FileGenTool
 from .tools.image_gen_tool import ImageGenTool
 from .tools.reminder_tool import ReminderTool
@@ -115,7 +118,7 @@ _PROVIDER_KEY_MAP = {
 }
 
 # Integrations that have no implementation yet
-_UNIMPLEMENTED_INTEGRATIONS = {"google_calendar", "gmail"}
+_UNIMPLEMENTED_INTEGRATIONS: set[str] = set()
 
 
 def _validate_startup(config: dict) -> None:
@@ -152,15 +155,10 @@ def _validate_startup(config: dict) -> None:
                 name,
             )
 
-    # 5. Warn about enabled scheduler jobs with no implementation
+    # 5. Log enabled scheduler jobs
     for job_name, job_cfg in config.get("scheduler", {}).items():
         if isinstance(job_cfg, dict) and job_cfg.get("enabled", False):
-            if job_name != "weekly_digest":  # weekly_digest is implemented
-                logger.warning(
-                    "Scheduler job '%s' is enabled but not yet implemented. "
-                    "It will be ignored.",
-                    job_name,
-                )
+            logger.info("Scheduler job '%s' is enabled", job_name)
 
 
 class Orchestrator:
@@ -200,13 +198,18 @@ class Orchestrator:
         # Metrics
         self.metrics = MetricsTracker()
 
+        # Per-user credential store and Google OAuth (before tool registration)
+        cred_db_path = config.get("jibsa", {}).get("credential_db_path", "data/credentials.db")
+        self.credential_store = CredentialStore(db_path=cred_db_path)
+        self.google_oauth = GoogleOAuthManager(self.credential_store)
+
         # Tool registry with CrewAI tool instances
         self.tool_registry = ToolRegistry()
         self._register_crewai_tools()
 
         # Intern management (SQLite-backed)
-        db_path = config.get("jibsa", {}).get("intern_db_path", "data/jibsa.db")
-        self.intern_store = InternStore(db_path=db_path)
+        intern_db_path = config.get("jibsa", {}).get("intern_db_path", "data/jibsa.db")
+        self.intern_store = InternStore(db_path=intern_db_path)
         self.intern_registry = InternRegistry(self.intern_store)
         self.router = MessageRouter(self.intern_registry.get_intern_names())
 
@@ -225,6 +228,7 @@ class Orchestrator:
         self._notion_circuit = CircuitBreaker("notion", failure_threshold=3, recovery_timeout=60)
         self._jira_circuit = CircuitBreaker("jira", failure_threshold=3, recovery_timeout=60)
         self._confluence_circuit = CircuitBreaker("confluence", failure_threshold=3, recovery_timeout=60)
+        self._google_circuit = CircuitBreaker("google", failure_threshold=3, recovery_timeout=60)
 
         # Approval history (completed/rejected plans)
         self._approval_history: list[dict] = []
@@ -233,16 +237,13 @@ class Orchestrator:
         self._edit_sessions: dict[str, tuple[str, float]] = {}
         self._edit_session_ttl: float = 3600.0  # 1 hour TTL
 
-        # Per-user credential store and Google OAuth
-        db_path = config.get("jibsa", {}).get("credential_db_path", "data/credentials.db")
-        self.credential_store = CredentialStore(db_path=db_path)
-        self.google_oauth = GoogleOAuthManager(self.credential_store)
-
         # Pending OAuth flows: user_id → service name
         self._pending_oauth: dict[str, str] = {}
 
-        # Register activity summary scheduler
+        # Register scheduled jobs
         self._register_activity_summary()
+        self._register_morning_briefing()
+        self._register_eod_review()
 
     def _register_crewai_tools(self) -> None:
         """Create and register CrewAI tool instances."""
@@ -261,8 +262,14 @@ class Orchestrator:
         # Slack tool (write tool — proposes action plans)
         self.tool_registry.register_crewai_tool("slack", SlackTool())
 
-        # Calendar tool (read-only stub for Phase 3)
-        self.tool_registry.register_crewai_tool("calendar", CalendarTool())
+        # Google Calendar + Gmail (per-user OAuth — requires `connect google`)
+        tz = self.config.get("jibsa", {}).get("timezone", "UTC")
+        self.tool_registry.register_crewai_tool(
+            "calendar", CalendarReadTool.create(self.google_oauth, tz)
+        )
+        self.tool_registry.register_crewai_tool(
+            "gmail", GmailReadTool.create(self.google_oauth)
+        )
 
         # File generation tool (write tool — proposes action plans)
         self.tool_registry.register_crewai_tool("file_gen", FileGenTool())
@@ -385,6 +392,175 @@ class Orchestrator:
 
         text = f"Weekly Activity Summary\n{stats_text}"
         self._post_blocks(channel, None, blocks, text)
+
+    # ------------------------------------------------------------------
+    # Scheduled jobs: morning briefing + EOD review
+    # ------------------------------------------------------------------
+
+    def _register_cron_job(self, name: str, handler, config_key: str, default_cron: str) -> None:
+        """Register a cron job from config if enabled."""
+        sched_cfg = self.config.get("scheduler", {}).get(config_key, {})
+        if not sched_cfg.get("enabled", False):
+            return
+
+        from apscheduler.triggers.cron import CronTrigger
+        cron_str = sched_cfg.get("cron", default_cron)
+        parts = cron_str.split()
+        if len(parts) >= 5:
+            tz = self.config.get("jibsa", {}).get("timezone", "UTC")
+            trigger = CronTrigger(
+                minute=parts[0], hour=parts[1], day=parts[2],
+                month=parts[3], day_of_week=parts[4], timezone=tz,
+            )
+            self.reminder_scheduler._scheduler.add_job(
+                handler, trigger=trigger, id=f"jibsa_{config_key}", replace_existing=True,
+            )
+            logger.info("Scheduled job '%s' registered: %s", name, cron_str)
+
+    def _register_morning_briefing(self) -> None:
+        self._register_cron_job("Morning Briefing", self._post_morning_briefing,
+                                "morning_briefing", "0 8 * * 1-5")
+
+    def _register_eod_review(self) -> None:
+        self._register_cron_job("EOD Review", self._post_eod_review,
+                                "eod_review", "0 17 * * 1-5")
+
+    def _post_morning_briefing(self) -> None:
+        """Post a morning briefing with today's calendar, overdue tasks, and pending Jira issues."""
+        channel = self.config.get("jibsa", {}).get("channel_name", "jibsa")
+        tz = self.config.get("jibsa", {}).get("timezone", "UTC")
+        sections: list[str] = []
+
+        # Calendar: today's events for all connected users
+        google_users = self.credential_store.list_users_for_service("google")
+        if google_users:
+            cal_lines = []
+            for uid in google_users:
+                try:
+                    creds = self.google_oauth.get_valid_credentials(uid)
+                    if not creds:
+                        continue
+                    from .integrations.google_calendar_client import GoogleCalendarClient
+                    client = GoogleCalendarClient(creds)
+                    events = client.list_today_events(tz)
+                    if events:
+                        # Resolve user name
+                        try:
+                            user_info = self.slack.users_info(user=uid)
+                            name = user_info["user"].get("real_name", uid)
+                        except Exception:
+                            name = uid
+                        for ev in events:
+                            summary = ev.get("summary", "(no title)")
+                            start = ev.get("start", {})
+                            time_str = start.get("dateTime", start.get("date", ""))
+                            if "T" in time_str:
+                                time_str = time_str.split("T")[1][:5]
+                            cal_lines.append(f"  {time_str} {summary} ({name})")
+                except Exception as e:
+                    logger.warning("Morning briefing: calendar failed for %s: %s", uid, e)
+
+            if cal_lines:
+                sections.append("*Today's Calendar*\n" + "\n".join(cal_lines))
+
+        # Notion: overdue tasks
+        if self.notion:
+            try:
+                context = self.notion.get_context_for_request("overdue tasks")
+                if context:
+                    sections.append(f"*Overdue Tasks*\n{context[:1000]}")
+            except Exception as e:
+                logger.warning("Morning briefing: Notion query failed: %s", e)
+
+        # Jira: assigned open issues
+        if self.jira:
+            try:
+                issues = self.jira.search_issues(
+                    "assignee = currentUser() AND resolution = Unresolved ORDER BY priority DESC",
+                    max_results=10,
+                )
+                if issues:
+                    jira_lines = []
+                    for iss in issues:
+                        key = iss.get("key", "")
+                        summary = iss.get("fields", {}).get("summary", "")
+                        jira_lines.append(f"  [{key}] {summary}")
+                    sections.append("*Open Jira Issues*\n" + "\n".join(jira_lines))
+            except Exception as e:
+                logger.warning("Morning briefing: Jira query failed: %s", e)
+
+        if not sections:
+            sections.append("Nothing on the radar today — enjoy a clean slate!")
+
+        blocks = [
+            {"type": "header", "text": {"type": "plain_text", "text": "Good Morning! Here's your daily briefing"}},
+        ]
+        for section in sections:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section}})
+            blocks.append({"type": "divider"})
+
+        text = "Morning Briefing\n" + "\n\n".join(sections)
+        self._post_blocks(channel, None, blocks, text)
+        logger.info("Morning briefing posted to #%s", channel)
+
+    def _post_eod_review(self) -> None:
+        """Post an end-of-day review with today's activity and tomorrow's schedule."""
+        channel = self.config.get("jibsa", {}).get("channel_name", "jibsa")
+        tz = self.config.get("jibsa", {}).get("timezone", "UTC")
+        sections: list[str] = []
+
+        # Approval history for today
+        today_actions = [
+            h for h in self._approval_history
+            if h.get("timestamp", "").startswith(datetime.now().strftime("%Y-%m-%d"))
+        ]
+        if today_actions:
+            action_lines = []
+            for h in today_actions[-10:]:
+                status_icon = "✅" if h["status"] == "approved" else "❌"
+                action_lines.append(f"  {status_icon} {h.get('summary', 'Action')}")
+            sections.append("*Today's Actions*\n" + "\n".join(action_lines))
+
+        # Tomorrow's calendar
+        google_users = self.credential_store.list_users_for_service("google")
+        if google_users:
+            cal_lines = []
+            for uid in google_users:
+                try:
+                    creds = self.google_oauth.get_valid_credentials(uid)
+                    if not creds:
+                        continue
+                    from .integrations.google_calendar_client import GoogleCalendarClient
+                    client = GoogleCalendarClient(creds)
+                    events = client.list_upcoming_events(days=2, timezone=tz)
+                    # Filter to tomorrow only
+                    tomorrow = (datetime.now(ZoneInfo(tz)) + timedelta(days=1)).date()
+                    for ev in events:
+                        start = ev.get("start", {})
+                        date_str = start.get("dateTime", start.get("date", ""))
+                        if str(tomorrow) in date_str:
+                            summary = ev.get("summary", "(no title)")
+                            time_str = date_str.split("T")[1][:5] if "T" in date_str else "all-day"
+                            cal_lines.append(f"  {time_str} {summary}")
+                except Exception as e:
+                    logger.warning("EOD review: calendar failed for %s: %s", uid, e)
+
+            if cal_lines:
+                sections.append("*Tomorrow's Schedule*\n" + "\n".join(cal_lines))
+
+        if not sections:
+            sections.append("Quiet day — nothing to report. See you tomorrow!")
+
+        blocks = [
+            {"type": "header", "text": {"type": "plain_text", "text": "End of Day Review"}},
+        ]
+        for section in sections:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section}})
+            blocks.append({"type": "divider"})
+
+        text = "EOD Review\n" + "\n\n".join(sections)
+        self._post_blocks(channel, None, blocks, text)
+        logger.info("EOD review posted to #%s", channel)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -1376,6 +1552,10 @@ class Orchestrator:
                 except Exception as e:
                     self._confluence_circuit.record_failure()
                     result = {"ok": False, "error": f"Confluence error: {e}"}
+            elif service == "calendar":
+                result = self._execute_google_step(step, "calendar")
+            elif service == "gmail":
+                result = self._execute_google_step(step, "gmail")
             else:
                 result = {"ok": False, "error": f"'{service}' not connected yet"}
             results.append((step, result))
@@ -1507,6 +1687,38 @@ class Orchestrator:
             message=message,
             run_at=run_at,
         )
+
+    # ------------------------------------------------------------------
+    # Google Calendar / Gmail execution
+    # ------------------------------------------------------------------
+
+    def _execute_google_step(self, step: dict, service: str) -> dict:
+        """Execute a Google Calendar or Gmail step using per-user credentials."""
+        user_id = current_user_id.get()
+        if not user_id:
+            return {"ok": False, "error": "Could not determine the requesting user."}
+
+        creds = self.google_oauth.get_valid_credentials(user_id)
+        if not creds:
+            return {"ok": False, "error": f"Google not connected. Say `connect google` first."}
+
+        try:
+            self._google_circuit.check()
+            if service == "calendar":
+                from .integrations.google_calendar_client import GoogleCalendarClient
+                client = GoogleCalendarClient(creds)
+            else:
+                from .integrations.gmail_client import GmailClient
+                client = GmailClient(creds)
+
+            result = client.execute_step(step)
+            self._google_circuit.record_success()
+            return result
+        except CircuitOpenError:
+            return {"ok": False, "error": "Google APIs are temporarily unavailable (circuit open). Try again later."}
+        except Exception as e:
+            self._google_circuit.record_failure()
+            return {"ok": False, "error": f"Google {service} error: {e}"}
 
     # ------------------------------------------------------------------
     # Rich Block Kit display

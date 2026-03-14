@@ -72,23 +72,22 @@ class TestStartupValidation:
                 _validate_startup(config)
             assert "NOTION_TOKEN" in caplog.text
 
-    def test_unimplemented_integration_warning(self, caplog):
+    def test_no_unimplemented_warning_for_known_integrations(self, caplog):
         config = {**_BASE_CONFIG, "integrations": {"gmail": {"enabled": True}}}
         with patch.dict(os.environ, _REQUIRED_ENV):
             import logging
             with caplog.at_level(logging.WARNING):
                 _validate_startup(config)
-            assert "gmail" in caplog.text
-            assert "not yet implemented" in caplog.text
+            assert "not yet implemented" not in caplog.text
 
-    def test_unimplemented_scheduler_job_warning(self, caplog):
+    def test_enabled_scheduler_job_logged(self, caplog):
         config = {
             **_BASE_CONFIG,
             "scheduler": {"morning_briefing": {"enabled": True, "cron": "0 8 * * 1-5"}},
         }
         with patch.dict(os.environ, _REQUIRED_ENV):
             import logging
-            with caplog.at_level(logging.WARNING):
+            with caplog.at_level(logging.INFO):
                 _validate_startup(config)
             assert "morning_briefing" in caplog.text
 

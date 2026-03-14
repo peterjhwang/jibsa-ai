@@ -38,8 +38,12 @@ TOOL_CATALOG: dict[str, dict] = {
         "write_actions": ["post_message"],
     },
     "calendar": {
-        "description": "Check schedule, list events, or propose calendar entries (Google Calendar — preview)",
-        "write_actions": [],  # read-only stub for now
+        "description": "View and manage Google Calendar events (requires Google connection)",
+        "write_actions": ["create_event", "update_event", "delete_event"],
+    },
+    "gmail": {
+        "description": "Read and send emails via Gmail (requires Google connection)",
+        "write_actions": ["send_email", "reply_email", "create_draft"],
     },
     "file_gen": {
         "description": "Generate files (CSV, JSON, Markdown, text) and upload to Slack (requires approval)",

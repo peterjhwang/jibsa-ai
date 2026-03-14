@@ -8,7 +8,7 @@ from src.tools.notion_read_tool import NotionReadTool
 from src.tools.web_search_tool import WebSearchTool
 from src.tools.code_exec_tool import CodeExecTool
 from src.tools.slack_tool import SlackTool
-from src.tools.calendar_tool import CalendarTool
+from src.tools.calendar_tool import CalendarReadTool
 
 
 # ---------------------------------------------------------------------------
@@ -138,29 +138,38 @@ class TestSlackTool:
 
 
 # ---------------------------------------------------------------------------
-# CalendarTool
+# CalendarReadTool
 # ---------------------------------------------------------------------------
 
-class TestCalendarTool:
-    def test_read_query_returns_roadmap(self):
-        tool = CalendarTool()
+class TestCalendarReadTool:
+    def test_no_user_context(self):
+        from src.context import current_user_id
+        tool = CalendarReadTool()
+        tool.google_oauth = MagicMock()
+        # current_user_id defaults to ""
+        token = current_user_id.set("")
         result = tool._run(query="my meetings today")
-        assert "Phase 3" in result or "coming" in result.lower()
+        current_user_id.reset(token)
+        assert "Could not determine" in result
 
-    def test_write_query_returns_not_available(self):
-        tool = CalendarTool()
-        result = tool._run(query="schedule a call Thursday 2pm")
-        assert "Phase 3" in result or "coming" in result.lower()
+    def test_not_connected(self):
+        from src.context import current_user_id
+        mock_oauth = MagicMock()
+        mock_oauth.get_valid_credentials.return_value = None
+        tool = CalendarReadTool.create(mock_oauth, "UTC")
+        token = current_user_id.set("U001")
+        result = tool._run(query="my meetings today")
+        current_user_id.reset(token)
+        assert "connect google" in result.lower()
 
-    def test_write_suggests_notion(self):
-        tool = CalendarTool()
-        result = tool._run(query="book a meeting with John")
-        assert "Notion" in result
-
-    def test_read_mentions_upcoming_features(self):
-        tool = CalendarTool()
-        result = tool._run(query="what's on my calendar")
-        assert "event" in result.lower() or "meeting" in result.lower() or "schedule" in result.lower()
+    def test_not_configured(self):
+        tool = CalendarReadTool()
+        tool.google_oauth = None
+        from src.context import current_user_id
+        token = current_user_id.set("U001")
+        result = tool._run(query="today")
+        current_user_id.reset(token)
+        assert "not configured" in result.lower()
 
 
 # ---------------------------------------------------------------------------

@@ -96,16 +96,26 @@ frozenlist==1.8.0
     #   aiosignal
 fsspec==2026.2.0
     # via huggingface-hub
+google-api-core==2.30.0
+    # via google-api-python-client
+google-api-python-client==2.192.0
+    # via -r requirements.in
 google-auth==2.49.1
     # via
+    #   google-api-core
+    #   google-api-python-client
+    #   google-auth-httplib2
     #   google-auth-oauthlib
     #   google-genai
+google-auth-httplib2==0.3.0
+    # via google-api-python-client
 google-auth-oauthlib==1.3.0
     # via -r requirements.in
 google-genai==1.67.0
     # via -r requirements.in
 googleapis-common-protos==1.73.0
     # via
+    #   google-api-core
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
 grpcio==1.78.0
@@ -120,6 +130,10 @@ hf-xet==1.4.2
     # via huggingface-hub
 httpcore==1.0.9
     # via httpx
+httplib2==0.31.2
+    # via
+    #   google-api-python-client
+    #   google-auth-httplib2
 httptools==0.7.1
     # via uvicorn
 httpx==0.28.1
@@ -277,11 +291,15 @@ propcache==0.4.1
     # via
     #   aiohttp
     #   yarl
+proto-plus==1.27.1
+    # via google-api-core
 protobuf==5.29.6
     # via
+    #   google-api-core
     #   googleapis-common-protos
     #   onnxruntime
     #   opentelemetry-proto
+    #   proto-plus
 pyarrow==23.0.1
     # via lancedb
 pyasn1==0.6.2
@@ -320,6 +338,8 @@ pyjwt==2.12.1
     # via
     #   crewai
     #   mcp
+pyparsing==3.3.2
+    # via httplib2
 pypdfium2==5.6.0
     # via pdfplumber
 pypika==0.51.1
@@ -355,6 +375,7 @@ regex==2026.1.15
 requests==2.32.5
     # via
     #   atlassian-python-api
+    #   google-api-core
     #   google-auth
     #   google-genai
     #   instructor
@@ -464,6 +485,8 @@ tzlocal==5.3.1
     # via apscheduler
 uc-micro-py==2.0.0
     # via linkify-it-py
+uritemplate==4.2.0
+    # via google-api-python-client
 urllib3==2.6.3
     # via
     #   kubernetes

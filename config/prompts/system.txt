@@ -71,6 +71,16 @@ Valid confluence actions:
 - update_page — params: page_id, title, body (HTML)
 - add_comment — params: page_id, body
 
+Valid calendar actions:
+- create_event — params: summary, start (ISO 8601), end (ISO 8601), description (optional), attendees (list of emails, optional)
+- update_event — params: event_id, updates (dict of fields to change)
+- delete_event — params: event_id
+
+Valid gmail actions:
+- send_email — params: to, subject, body, cc (optional), bcc (optional)
+- reply_email — params: message_id, body
+- create_draft — params: to, subject, body
+
 The user will review the plan and approve (✅ yes / proceed) or reject (❌ no / cancel / revise).
 
 **For READ-ONLY REQUESTS** — answer directly from the context already injected above. Never say you need MCP, tools, or a server connection to answer.

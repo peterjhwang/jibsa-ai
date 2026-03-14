@@ -169,8 +169,14 @@ def test_slack_tool_has_write_actions(registry):
     assert "post_message" in TOOL_CATALOG["slack"]["write_actions"]
 
 
-def test_calendar_tool_is_read_only(registry):
-    assert TOOL_CATALOG["calendar"]["write_actions"] == []
+def test_calendar_tool_has_write_actions(registry):
+    assert "create_event" in TOOL_CATALOG["calendar"]["write_actions"]
+    assert "delete_event" in TOOL_CATALOG["calendar"]["write_actions"]
+
+
+def test_gmail_tool_in_catalog(registry):
+    assert "gmail" in TOOL_CATALOG
+    assert "send_email" in TOOL_CATALOG["gmail"]["write_actions"]
 
 
 def test_can_execute_slack_post(registry):

@@ -125,6 +125,14 @@ class CredentialStore:
         ).fetchall()
         return [row["service"] for row in rows]
 
+    def list_users_for_service(self, service: str) -> list[str]:
+        """Return all user IDs that have credentials for a given service."""
+        rows = self._conn.execute(
+            "SELECT slack_user_id FROM credentials WHERE service = ?",
+            (service,),
+        ).fetchall()
+        return [row["slack_user_id"] for row in rows]
+
     def close(self) -> None:
         """Close the SQLite connection."""
         self._conn.close()

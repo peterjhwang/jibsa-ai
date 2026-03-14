@@ -33,6 +33,11 @@ jibsa:
   code_exec_timeout: 30   # Seconds before code exec is killed
   code_exec_max_output: 4000  # Max chars of stdout/stderr captured
 
+  # Database paths — override for Railway volume mount (/data/)
+  # Local dev uses defaults: data/jibsa.db, data/credentials.db
+  # intern_db_path: "/data/jibsa.db"
+  # credential_db_path: "/data/credentials.db"
+
 scheduler:
   morning_briefing:
     enabled: false        # Daily briefing: calendar, overdue tasks, Jira issues

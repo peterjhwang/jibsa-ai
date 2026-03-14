@@ -192,7 +192,7 @@ class Orchestrator:
 
         # Reminder scheduler
         tz = config.get("jibsa", {}).get("timezone", "UTC")
-        scheduler_db = config.get("jibsa", {}).get("intern_db_path", "data/jibsa.db")
+        scheduler_db = os.environ.get("JIBSA_DB_PATH") or config.get("jibsa", {}).get("intern_db_path", "data/jibsa.db")
         self.reminder_scheduler = ReminderScheduler(slack_client, timezone=tz, db_path=scheduler_db)
         self.reminder_scheduler.start()
 
@@ -203,11 +203,11 @@ class Orchestrator:
         self.metrics = MetricsTracker()
 
         # Audit log
-        audit_db_path = config.get("jibsa", {}).get("intern_db_path", "data/jibsa.db")
+        audit_db_path = os.environ.get("JIBSA_DB_PATH") or config.get("jibsa", {}).get("intern_db_path", "data/jibsa.db")
         self.audit = AuditStore(db_path=audit_db_path)
 
         # Per-user credential store and Google OAuth (before tool registration)
-        cred_db_path = config.get("jibsa", {}).get("credential_db_path", "data/credentials.db")
+        cred_db_path = os.environ.get("CREDENTIAL_DB_PATH") or config.get("jibsa", {}).get("credential_db_path", "data/credentials.db")
         self.credential_store = CredentialStore(db_path=cred_db_path)
         self.google_oauth = GoogleOAuthManager(self.credential_store)
 
@@ -216,7 +216,7 @@ class Orchestrator:
         self._register_crewai_tools()
 
         # Intern management (SQLite-backed)
-        intern_db_path = config.get("jibsa", {}).get("intern_db_path", "data/jibsa.db")
+        intern_db_path = os.environ.get("JIBSA_DB_PATH") or config.get("jibsa", {}).get("intern_db_path", "data/jibsa.db")
         self.intern_store = InternStore(db_path=intern_db_path)
         self.intern_registry = InternRegistry(self.intern_store)
         self.router = MessageRouter(self.intern_registry.get_intern_names())

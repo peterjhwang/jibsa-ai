@@ -12,6 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ ./src/
 COPY config/ ./config/
 
+# Create persistent data directory (Railway volume mounts here)
+RUN mkdir -p /data && chown jibsa:jibsa /data
+
 # Switch to non-root user
 USER jibsa
 

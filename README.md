@@ -339,25 +339,25 @@ jibsa-ai/
 graph TD
     User["👤 You in #jibsa"] -->|"@jibsa alex do X"| SlackSocket["Slack Socket Mode"]
 
-    SlackSocket --> App["app.py\nSlack Bolt + Block Kit"]
-    App --> Router["router.py\nParse & Route"]
+    SlackSocket --> App["app.py<br/>Slack Bolt + Block Kit"]
+    App --> Router["router.py<br/>Parse & Route"]
 
-    Router -->|hire request| HireFlow["hire_flow.py\nJD Builder"]
-    Router -->|intern task| Orchestrator["orchestrator.py\nOrchestrator"]
+    Router -->|hire request| HireFlow["hire_flow.py<br/>JD Builder"]
+    Router -->|intern task| Orchestrator["orchestrator.py<br/>Orchestrator"]
     Router -->|management cmd| Orchestrator
 
-    HireFlow -->|JD complete| Registry["intern_registry.py\nNotion-backed"]
+    HireFlow -->|JD complete| Registry["intern_registry.py<br/>Notion-backed"]
 
-    Orchestrator --> CrewRunner["crew_runner.py\nCrewAI Engine"]
+    Orchestrator --> CrewRunner["crew_runner.py<br/>CrewAI Engine"]
 
-    CrewRunner -->|"Agent + Task + Crew"| CrewAI["CrewAI\n(Claude / GPT-4 / Gemini)"]
+    CrewRunner -->|"Agent + Task + Crew"| CrewAI["CrewAI<br/>(Claude / GPT-4 / Gemini)"]
 
-    CrewAI -->|tool call| Tools["Tools\nNotion · Jira · Confluence\nWeb Search · Web Reader\nCode Exec · File Gen · Image Gen"]
-    CrewAI -->|ambiguous| Clarify["Clarify\nAsk user for details"]
+    CrewAI -->|tool call| Tools["Tools<br/>Notion · Jira · Confluence<br/>Web Search · Web Reader<br/>Code Exec · File Gen · Image Gen"]
+    CrewAI -->|ambiguous| Clarify["Clarify<br/>Ask user for details"]
     Clarify -->|user replies| CrewAI
-    CrewAI -->|action plan| Approval["approval.py\nBlock Kit ✅ / ❌"]
+    CrewAI -->|action plan| Approval["approval.py<br/>Block Kit ✅ / ❌"]
 
-    Approval -->|approved| Execute["Execute Plan\nNotion · Jira · Confluence\nSlack · Files · Images · Reminders"]
+    Approval -->|approved| Execute["Execute Plan<br/>Notion · Jira · Confluence<br/>Slack · Files · Images · Reminders"]
     Approval -->|rejected| User
 
     Tools -->|read results| CrewAI

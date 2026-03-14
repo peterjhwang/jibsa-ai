@@ -1,61 +1,51 @@
 # Contributing to Jibsa
 
-Thanks for your interest in contributing to Jibsa! This guide covers development setup, architecture, and conventions.
+Thanks for your interest in contributing! This guide covers development setup, architecture, and conventions.
 
-## Development Setup
+## Quick Setup
 
 ```bash
-# Clone
+# Clone and run the setup wizard
 git clone https://github.com/peterjhwang/jibsa-ai.git
 cd jibsa-ai
-
-# Create venv
-uv venv
-source .venv/bin/activate
-
-# Install dependencies
-uv pip install -r requirements.txt
-
-# Run tests
-python -m pytest tests/ -v
+./scripts/setup.sh              # bootstrap: uv, .venv, compile, install
+python -m src.setup              # interactive config wizard (first time)
+./scripts/doctor.sh              # verify everything works
+./scripts/test.sh                # run tests
 ```
 
 ## Running the Bot
 
 ```bash
-# Set up environment
-cp .env.example .env
-# Fill in SLACK_BOT_TOKEN, SLACK_APP_TOKEN, NOTION_TOKEN
-
-cp config/notion_databases.yaml.example config/notion_databases.yaml
-# Fill in your Notion database IDs
-
-# Start
-python -m src.app
+./scripts/run.sh                 # start Jibsa (Socket Mode)
+LOG_LEVEL=DEBUG ./scripts/run.sh # verbose logging
 ```
 
 ## Architecture Overview
 
 ```
 Slack message
-    → app.py (Bolt event handler)
+    → app.py (Bolt event handler + graceful shutdown)
     → orchestrator.py (central router)
-        → router.py (parse: hire? intern task? management? jibsa?)
+        → router.py (parse: hire? intern? team? management? connect?)
         → hire_flow.py (conversational JD creation)
         → crew_runner.py (CrewAI Agent + Task + Crew)
-            → tools/ (Notion, web search, code exec, Slack, calendar)
+            → tools/ (Notion, Jira, Confluence, Calendar, Gmail, Web, Code, etc.)
         → approval.py (propose-approve gate, Block Kit buttons)
-        → integrations/ (Notion execution)
+        → integrations/ (Notion, Jira, Confluence, Calendar, Gmail execution)
+        → audit_store.py (persistent audit logging)
     → Slack reply
 ```
 
 ### Key Concepts
 
 - **Orchestrator** (`orchestrator.py`): Central entry point. Routes messages, manages history, dispatches to hire flow / interns / Jibsa.
-- **CrewRunner** (`crew_runner.py`): Builds CrewAI Agent + Task + Crew per request. Three entry points: `run_for_jibsa()`, `run_for_intern()`, `run_for_hire()`. Agents are instructed to clarify ambiguous requests before proposing actions.
-- **InternJD** (`models/intern.py`): Dataclass representing an intern's Job Description. Includes validation, per-intern memory, and formatting.
-- **ToolRegistry** (`tool_registry.py`): Manages tool catalog + CrewAI instances. Filters tools per intern based on JD. Checks write-action permissions.
-- **Clarify-Propose-Approve**: When a request is ambiguous or missing critical details, agents ask a clarifying question before acting. Read-only tools execute during CrewAI reasoning. Write operations produce a JSON `action_plan` → Slack Block Kit buttons → execute after approval.
+- **CrewRunner** (`crew_runner.py`): Builds CrewAI Agent + Task + Crew per request. Agents clarify ambiguous requests before acting.
+- **InternJD** (`models/intern.py`): Dataclass for intern Job Descriptions. Stored in SQLite.
+- **ToolRegistry** (`tool_registry.py`): Tool catalog + per-intern permission filtering.
+- **CredentialStore** (`integrations/credential_store.py`): Fernet-encrypted per-user OAuth tokens in SQLite.
+- **AuditStore** (`integrations/audit_store.py`): Persistent action log in SQLite.
+- **Clarify-Propose-Approve**: Read tools execute during reasoning. Write operations produce a JSON `action_plan` → Block Kit buttons → execute after approval.
 
 ### Adding a New Tool
 
@@ -64,46 +54,44 @@ Slack message
 3. Add tool name to `VALID_TOOL_NAMES` in `src/models/intern.py`
 4. Register instance in `orchestrator._register_crewai_tools()`
 5. If it's a write tool, add execution handler in `orchestrator._execute_plan()`
-6. Export from `src/tools/__init__.py`
-7. Add tests in `tests/test_tools.py`
+6. Add valid actions to `config/prompts/system.txt`
+7. Export from `src/tools/__init__.py`
+8. Add tests
 
 ### Adding a New Integration
 
-1. Create client in `src/integrations/your_service.py`
-2. Add `enabled: false` entry in `config/settings.yaml` under `integrations`
-3. Add env var to `.env.example`
+1. Create client in `src/integrations/your_service.py` (follow `jira_client.py` pattern)
+2. Add `enabled: false` in `config/settings.yaml` under `integrations`
+3. Add env vars to `.env.example`
 4. Wire into orchestrator's `_execute_plan()` for write operations
-5. Add setup docs in `docs/`
+5. Add audit logging for key actions
+6. Add setup docs in `docs/`
+7. Add tests
+
+### Adding an Audit Event
+
+Call `self.audit.log()` at the action point:
+```python
+self.audit.log(
+    action="your_action_name",
+    user_id=current_user_id.get(""),
+    service="service_name",
+    details={"key": "value"},
+    status="ok",  # or "error", "partial"
+    thread_ts=thread_ts,
+)
+```
 
 ## Testing
 
 ```bash
-# All tests
-python -m pytest tests/ -v
-
-# Specific file
-python -m pytest tests/test_orchestrator.py -v
-
-# With coverage
-python -m pytest tests/ --cov=src --cov-report=term-missing
+./scripts/test.sh                # all tests
+./scripts/test.sh -k "test_name" # specific test
+./scripts/test.sh -x             # stop on first failure
+./scripts/test.sh --cov=src      # with coverage
 ```
 
 All external services are mocked in tests. No API keys or live connections needed.
-
-### Test Files
-
-| File | Covers |
-|------|--------|
-| `test_orchestrator.py` | Routing, approval, Block Kit buttons, Slack execution |
-| `test_crew_runner.py` | CrewAI crew building, JSON extraction, LLM string format |
-| `test_router.py` | Message parsing, intern routing, management commands |
-| `test_hire_flow.py` | JD extraction, validation, session lifecycle |
-| `test_intern_model.py` | InternJD validation, memory, formatting |
-| `test_tool_registry.py` | Tool filtering, permissions, CrewAI instances |
-| `test_tools.py` | All 5 CrewAI tools (Notion, web search, code exec, Slack, calendar) |
-| `test_approval.py` | Approval state machine, keyword matching |
-| `test_second_brain.py` | Notion schema-free reads/writes, page flattening |
-| `test_intern_registry.py` | Intern CRUD, caching, Notion integration |
 
 ## Code Conventions
 
@@ -113,28 +101,13 @@ All external services are mocked in tests. No API keys or live connections neede
 - **Tests mock all external services** — no API keys in CI
 - **CrewAI tools** subclass `BaseTool` from `crewai.tools`
 - **Logging** via `logging.getLogger(__name__)` throughout
+- **SQLite stores** use `threading.Lock()` for write operations
+- **Audit all significant actions** — proposals, approvals, executions, CRUD
 
-## Project Layout
+## Pull Request Guidelines
 
-```
-src/
-├── app.py                  # Slack Bolt entry + Block Kit action handlers
-├── orchestrator.py         # Central router and plan executor
-├── crew_runner.py          # CrewAI engine (Agent/Task/Crew)
-├── router.py               # Message parsing and intern routing
-├── hire_flow.py            # Conversational JD builder
-├── intern_registry.py      # Intern CRUD (Notion-backed)
-├── tool_registry.py        # Tool catalog + permission checking
-├── approval.py             # Approval state machine
-├── models/
-│   └── intern.py           # InternJD dataclass
-├── tools/
-│   ├── notion_read_tool.py # Notion queries (read-only)
-│   ├── web_search_tool.py  # DuckDuckGo search
-│   ├── code_exec_tool.py   # Sandboxed Python
-│   ├── slack_tool.py       # Slack post (write)
-│   └── calendar_tool.py    # Calendar stub
-└── integrations/
-    ├── notion_client.py    # Notion SDK wrapper
-    └── notion_second_brain.py  # Schema-free PARA ops
-```
+- Create a feature branch from `main`
+- Keep PRs focused — one feature or fix per PR
+- Add tests for new functionality
+- Run `./scripts/test.sh` before submitting
+- Use descriptive commit messages

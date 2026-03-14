@@ -134,6 +134,7 @@ def main():
     def _shutdown(sig, frame):
         signame = signal.Signals(sig).name
         logger.info("Received %s — shutting down gracefully...", signame)
+        orchestrator.audit.close()
         orchestrator.intern_store.close()
         orchestrator.credential_store.close()
         orchestrator.reminder_scheduler.shutdown()

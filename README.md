@@ -69,6 +69,7 @@ You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
 | `@jibsa connect google` | Start per-user Google OAuth flow (DM-based) |
 | `@jibsa disconnect google` | Revoke and delete stored Google tokens |
 | `@jibsa my connections` | List your connected services |
+| `@jibsa audit` | View recent audit log entries |
 
 ### Approval
 
@@ -107,6 +108,7 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 - **Crew timeout** — configurable `SIGALRM`-based timeout for CrewAI executions (default 5 min)
 - **Code sandbox hardening** — two-layer defence (regex + AST analysis) blocks imports, dunder access, and obfuscation tricks
 - **Web search rate limiting** — token-bucket limiter (10/min) with ZenRows SERP fallback prevents IP bans
+- **Audit logging** — all significant actions (proposals, approvals, executions, CRUD, connections) logged to SQLite; queryable via `@jibsa audit`
 
 ### Rich Slack UI (Block Kit)
 - **Intern cards** — `list interns` shows per-intern cards with tools, responsibilities preview, and "View JD" buttons
@@ -202,9 +204,8 @@ cd jibsa-ai
 # 2. Bootstrap (installs uv, creates .venv, compiles & installs deps)
 ./scripts/setup.sh
 
-# 3. Configure
-#    Edit .env with your Slack tokens, LLM API key, and Notion token
-#    Edit config/notion_databases.yaml with your Notion database IDs
+# 3. Interactive setup wizard (walks you through API keys + integrations)
+python -m src.setup
 
 # 4. Verify setup
 ./scripts/doctor.sh
@@ -222,6 +223,7 @@ cd jibsa-ai
 | Script | Purpose |
 |--------|---------|
 | `./scripts/setup.sh` | Full bootstrap: install uv, create `.venv`, compile + install deps |
+| `./scripts/setup_wizard.sh` | Interactive config wizard: API keys, integrations, encryption key |
 | `./scripts/compile.sh` | Compile `requirements.in` → pinned `requirements.txt` |
 | `./scripts/install.sh` | Install from pinned `requirements.txt` (add `--dev` for test deps) |
 | `./scripts/run.sh` | Start Jibsa (Socket Mode) |
@@ -245,6 +247,8 @@ docker-compose up -d
 - **[Notion Setup](docs/notion-setup.md)** — Connect your Notion Second Brain
 - **[Jira + Confluence Setup](docs/jira-confluence-setup.md)** — Connect Atlassian (team-shared API token)
 - **[Google OAuth Setup](docs/google-oauth-setup.md)** — Per-user Google Calendar + Gmail credentials
+- **[Changelog](CHANGELOG.md)** — Release history
+- **[Contributing](CONTRIBUTING.md)** — Development setup, testing, architecture
 
 ---
 
@@ -300,7 +304,8 @@ jibsa-ai/
 │   ├── context.py              # ContextVar for per-request user identity
 │   ├── circuit_breaker.py      # Three-state circuit breaker for API resilience
 │   ├── metrics.py              # In-memory request tracking and stats
-│   ├── scheduler.py            # APScheduler wrapper for timed reminders
+│   ├── scheduler.py            # APScheduler wrapper (SQLite-backed persistence)
+│   ├── setup.py                # Interactive setup wizard CLI
 │   ├── models/
 │   │   └── intern.py           # InternJD dataclass (validation, channel-scoped memory)
 │   ├── tools/
@@ -321,6 +326,7 @@ jibsa-ai/
 │       ├── notion_second_brain.py  # Schema-free PARA operations
 │       ├── jira_client.py          # Thin Jira wrapper (retry/backoff, execute_step)
 │       ├── confluence_client.py    # Thin Confluence wrapper (retry/backoff, execute_step)
+│       ├── audit_store.py          # Persistent audit logging (SQLite)
 │       ├── intern_store.py         # SQLite backend for intern JD storage
 │       ├── credential_store.py    # Fernet-encrypted SQLite per-user credential store
 │       ├── google_oauth.py        # Google OAuth2 OOB flow (per-user tokens)
@@ -338,6 +344,7 @@ jibsa-ai/
 │
 ├── scripts/
 │   ├── setup.sh                # Full bootstrap (uv, .venv, compile, install)
+│   ├── setup_wizard.sh         # Interactive config wizard
 │   ├── compile.sh              # requirements.in → requirements.txt
 │   ├── install.sh              # Install pinned deps into .venv
 │   ├── run.sh                  # Start Jibsa
@@ -345,11 +352,14 @@ jibsa-ai/
 │   └── doctor.sh               # Health check (runtime, deps, env, config)
 │
 ├── data/                       # SQLite credential store (gitignored)
-├── tests/                      # pytest test suite (463 passing)
+├── tests/                      # pytest test suite (479 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
 ├── requirements.in             # Loose dependency constraints (edit this)
 ├── requirements.txt            # Pinned lockfile (auto-generated)
+├── .github/                    # Issue/PR templates
+├── CHANGELOG.md                # Release history
+├── CONTRIBUTING.md             # Developer guide
 ├── Dockerfile
 ├── docker-compose.yml
 └── .env.example
@@ -426,7 +436,7 @@ graph TD
 ./scripts/test.sh --cov=src --cov-report=term-missing
 ```
 
-463 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 13 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
+479 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 13 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
 
 ---
 
@@ -442,23 +452,6 @@ graph TD
 - **Optional:** `CREDENTIAL_ENCRYPTION_KEY` for persistent encrypted credential storage
 - **Optional:** `ZENROWS_API_KEY` for the Web Reader tool and web search fallback
 - **Optional:** `GOOGLE_API_KEY` for Nano Banana 2 image generation (also used if your LLM provider is Google)
-
----
-
-## Roadmap
-
-| Phase | Scope | Status |
-|-------|-------|--------|
-| **1** | Core loop: Slack bot + Claude + propose-approve flow | ✅ Done |
-| **2** | Notion Second Brain (PARA: 26 databases, schema-free) | ✅ Done |
-| **2.5** | Multi-intern platform: CrewAI, hiring flow, 5 tools, Block Kit | ✅ Done |
-| **2.6** | Reliability (config validation, circuit breaker, metrics, approval TTL) | ✅ Done |
-| **2.7** | New tools: Web Reader, File Gen, Image Gen, Reminders + team collaboration | ✅ Done |
-| **2.8** | UX: help, edit JD, history, Block Kit, doctor CLI, activity digest | ✅ Done |
-| **3** | Jira + Confluence, hardening (retry, shutdown, sandbox, rate limiting) | ✅ Done |
-| **3.5** | SQLite intern storage, per-user credential store, Google OAuth | ✅ Done |
-| **4** | Google Calendar + Gmail (per-user OAuth), morning briefing, EOD review | ✅ Done |
-| **5** | Setup wizard, audit logging, open-source polish | 🔜 |
 
 ## License
 

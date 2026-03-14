@@ -24,6 +24,7 @@ from .crew_runner import CrewRunner
 from .hire_flow import HireFlowManager
 from .metrics import MetricsTracker
 from .intern_registry import InternRegistry
+from .integrations.audit_store import AuditStore
 from .integrations.intern_store import InternStore
 from .integrations.notion_second_brain import build_second_brain
 from .models.intern import InternJD
@@ -53,7 +54,7 @@ _CONFIG_DIR = Path(__file__).parent.parent / "config"
 # Commands handled directly by the orchestrator (not routed to interns/LLM)
 MANAGEMENT_COMMANDS = {
     "list interns", "team", "interns", "show team", "stats", "reminders",
-    "history", "help", "my connections", "connections",
+    "history", "help", "audit", "my connections", "connections",
 }
 
 
@@ -198,6 +199,10 @@ class Orchestrator:
 
         # Metrics
         self.metrics = MetricsTracker()
+
+        # Audit log
+        audit_db_path = config.get("jibsa", {}).get("intern_db_path", "data/jibsa.db")
+        self.audit = AuditStore(db_path=audit_db_path)
 
         # Per-user credential store and Google OAuth (before tool registration)
         cred_db_path = config.get("jibsa", {}).get("credential_db_path", "data/credentials.db")
@@ -635,6 +640,8 @@ class Orchestrator:
                 self._handle_history(channel, thread_ts)
             elif cmd == "help":
                 self._handle_help(channel, thread_ts)
+            elif cmd == "audit":
+                self._handle_audit(channel, thread_ts)
             elif cmd in ("my connections", "connections"):
                 self._handle_list_connections(channel, thread_ts, user)
             else:
@@ -759,6 +766,7 @@ class Orchestrator:
         if result.get("ok"):
             self.router.update_names(self.intern_registry.get_intern_names())
             self._post(channel, thread_ts, f"✅ Intern '{name}' has been deactivated.")
+            self.audit.log(action="intern_deactivated", user_id=current_user_id.get(""), details={"name": name})
         else:
             self._post(channel, thread_ts, f"⚠️ {result.get('error', 'Could not fire intern')}")
 
@@ -1152,7 +1160,7 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _record_history(self, plan: dict, intern_name: str | None, status: str) -> None:
-        """Record a completed/rejected plan to history."""
+        """Record a completed/rejected plan to history and audit log."""
         self._approval_history.append({
             "summary": plan.get("summary", "Unknown plan"),
             "intern": intern_name or "jibsa",
@@ -1163,6 +1171,14 @@ class Orchestrator:
         # Keep last 50
         if len(self._approval_history) > 50:
             self._approval_history = self._approval_history[-50:]
+
+        # Audit log
+        action = "plan_approved" if status == "approved" else "plan_rejected"
+        self.audit.log(
+            action=action,
+            user_id=current_user_id.get(""),
+            details={"summary": plan.get("summary", ""), "steps": len(plan.get("steps", []))},
+        )
 
     def _handle_history(self, channel: str, thread_ts: str) -> None:
         """Display recent approval history."""
@@ -1578,6 +1594,16 @@ class Orchestrator:
 
         self._post(channel, thread_ts, f"{prefix}{chr(10).join(lines)}")
 
+        # Audit: plan executed
+        ok_count = sum(1 for _, r in results if r.get("ok"))
+        self.audit.log(
+            action="plan_executed",
+            user_id=current_user_id.get(""),
+            details={"summary": plan.get("summary", ""), "steps": len(results), "ok": ok_count},
+            status="ok" if ok_count == len(results) else "partial",
+            thread_ts=thread_ts,
+        )
+
         # Upload any generated files
         for step, result in results:
             if result.get("ok") and result.get("file_path"):
@@ -1939,8 +1965,43 @@ class Orchestrator:
             result = self.google_oauth.revoke_and_delete(user)
             if result["ok"]:
                 self._post(channel, thread_ts, "Disconnected from Google. Your credentials have been revoked and deleted.")
+                self.audit.log(action="service_disconnected", user_id=user, service="google")
             else:
                 self._post(channel, thread_ts, f"Could not disconnect: {result['error']}")
+
+    def _handle_audit(self, channel: str, thread_ts: str) -> None:
+        """Show recent audit log entries."""
+        entries = self.audit.query(limit=15)
+        if not entries:
+            self._post(channel, thread_ts, "No audit entries yet.")
+            return
+
+        blocks = [
+            {"type": "header", "text": {"type": "plain_text", "text": "Audit Log (recent)"}},
+        ]
+        for entry in entries:
+            ts = entry.get("timestamp", "")
+            action = entry.get("action", "")
+            service = entry.get("service", "")
+            status = entry.get("status", "ok")
+            details = entry.get("details", {})
+            summary = details.get("summary", "") if isinstance(details, dict) else ""
+            user_id = entry.get("user_id", "")
+
+            icon = "✅" if status == "ok" else "⚠️"
+            svc_str = f" ({service})" if service else ""
+            user_str = f" by <@{user_id}>" if user_id else ""
+            detail_str = f" — {summary}" if summary else ""
+
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"{icon} `{ts}` *{action}*{svc_str}{user_str}{detail_str}"},
+            })
+
+        text = "Audit Log\n" + "\n".join(
+            f"{e.get('timestamp')} {e.get('action')} {e.get('status')}" for e in entries
+        )
+        self._post_blocks(channel, thread_ts, blocks, text)
 
     def _handle_list_connections(self, channel: str, thread_ts: str, user: str) -> None:
         """List the user's connected services."""
@@ -1970,6 +2031,7 @@ class Orchestrator:
             result = self.google_oauth.exchange_code(user, code)
             if result["ok"]:
                 self._post(channel, thread_ts, "Connected to Google! Your Calendar and Gmail are now available to your interns.")
+                self.audit.log(action="service_connected", user_id=user, service="google")
             else:
                 self._post(channel, thread_ts, f"Authorization failed: {result['error']}\n\nSay `connect google` to try again.")
 

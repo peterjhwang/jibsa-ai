@@ -207,6 +207,7 @@ The Metrics Reporter gathers data from Notion, Jira, and your integrations, calc
 - **Channel-scoped memory** — interns remember past interactions, isolated per Slack channel (capped at 20 entries each)
 - **Smart routing** — `@jibsa alex do X`, `@jibsa ask alex to X`, name prefix, etc.
 - **Team collaboration** — `@jibsa alex, mia do X` spins up a multi-agent CrewAI crew
+- **Inter-intern delegation** — interns with the `delegate` tool can ask other interns for help mid-task (e.g. a Content intern delegates research to a Research intern, gets results back, and finishes writing)
 
 ### SOPs (Standard Operating Procedures)
 - **Procedural templates** — define step-by-step procedures that interns follow when specific keywords are detected in messages
@@ -259,6 +260,7 @@ The Metrics Reporter gathers data from Notion, Jira, and your integrations, calc
 | **Calendar** | Read + Write | View, create, update, delete Google Calendar events (per-user OAuth) |
 | **Gmail** | Read + Write | Search, read, send, reply, draft emails (per-user OAuth) |
 | **Drive** | Read + Write | Search, read, create files in Google Drive (per-user OAuth) |
+| **Delegate** | Read-only | Ask another intern to help with a subtask mid-reasoning — results returned inline |
 
 ### Integrations
 
@@ -450,6 +452,7 @@ jibsa-ai/
 │   │   ├── image_gen_tool.py       # CrewAI BaseTool: Nano Banana 2 image generation
 │   │   ├── reminder_tool.py        # CrewAI BaseTool: scheduled reminders
 │   │   ├── slack_tool.py           # CrewAI BaseTool: Slack post (write, needs approval)
+│   │   ├── delegate_tool.py       # CrewAI BaseTool: inter-intern delegation
 │   │   ├── calendar_tool.py       # CrewAI BaseTool: Google Calendar (per-user OAuth)
 │   │   ├── gmail_tool.py          # CrewAI BaseTool: Gmail (per-user OAuth)
 │   │   └── drive_tool.py          # CrewAI BaseTool: Google Drive (per-user OAuth)
@@ -487,7 +490,7 @@ jibsa-ai/
 │   └── doctor.sh               # Health check (runtime, deps, env, config)
 │
 ├── data/                       # SQLite credential store (gitignored)
-├── tests/                      # pytest test suite (612 passing)
+├── tests/                      # pytest test suite (621 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
 ├── requirements.in             # Loose dependency constraints (edit this)
@@ -576,7 +579,7 @@ graph TD
 ./scripts/test.sh --cov=src --cov-report=term-missing
 ```
 
-612 tests covering: routing, approval, CrewAI runner, hire flow, SOP store, SOP model, SOP registry, SOP creation flow, intern model, tool registry, all 14 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
+621 tests covering: routing, approval, CrewAI runner, hire flow, SOP store, SOP model, SOP registry, SOP creation flow, inter-intern delegation, intern model, tool registry, all 15 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
 
 ---
 
@@ -592,6 +595,35 @@ graph TD
 - **Optional:** `CREDENTIAL_ENCRYPTION_KEY` for persistent encrypted credential storage
 - **Optional:** `ZENROWS_API_KEY` for the Web Reader tool and web search fallback
 - **Optional:** `GOOGLE_API_KEY` for Nano Banana 2 image generation (also used if your LLM provider is Google)
+
+## Roadmap
+
+| Phase | Integration | Description | Status |
+|-------|-------------|-------------|--------|
+| 3 | **Google Meet Notes** | Pull meeting notes from Google Docs, extract action items | Planned |
+| 4 | **Employment Hero** | Sync employee data, leave requests, timesheets, and onboarding workflows | Planned |
+| 4 | **Xero** | Read invoices, expenses, and financial reports; create bills and track payments | Planned |
+| 5 | **Weekly Digest** | Automated cross-integration weekly summary with trends | Planned |
+
+### Employment Hero (Phase 4)
+
+HR and people operations integration via the [Employment Hero API](https://developer.employmenthero.com/):
+- Query employee directory and org structure
+- Check and manage leave requests and balances
+- View timesheets and attendance
+- Track onboarding progress for new hires
+- SOPs: `leave-summary`, `onboarding-checklist`, `timesheet-report`
+
+### Xero (Phase 4)
+
+Accounting and finance integration via the [Xero API](https://developer.xero.com/):
+- Query invoices, bills, and payment status
+- View expense claims and receipts
+- Pull profit & loss and balance sheet reports
+- Track overdue invoices and cash flow
+- SOPs: `invoice-summary`, `expense-report`, `overdue-followup`
+
+---
 
 ## License
 

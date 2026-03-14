@@ -45,6 +45,7 @@ from .tools.reminder_tool import ReminderTool
 from .tools.web_reader_tool import WebReaderTool
 from .tools.jira_read_tool import JiraReadTool
 from .tools.confluence_read_tool import ConfluenceReadTool
+from .tools.delegate_tool import DelegateToInternTool
 from .scheduler import ReminderScheduler
 from .integrations.credential_store import CredentialStore
 from .integrations.sop_store import SOPStore
@@ -233,6 +234,18 @@ class Orchestrator:
         if sop_yaml.exists():
             SOPRegistry.seed_from_yaml(self.sop_store, str(sop_yaml))
 
+        # Delegation tool (needs intern_registry + runner, so registered after them)
+        self.tool_registry.register_crewai_tool(
+            "delegate",
+            DelegateToInternTool.create(
+                intern_registry=self.intern_registry,
+                crew_runner=self.runner,
+                tool_registry=self.tool_registry,
+                config=self.config,
+                notion=self.notion,
+            ),
+        )
+
         # Hire flow
         self.hire_flow = HireFlowManager(self.runner, self.intern_registry, self.tool_registry)
 
@@ -320,6 +333,8 @@ class Orchestrator:
             self.tool_registry.register_crewai_tool(
                 "confluence", ConfluenceReadTool.create(self.confluence_client)
             )
+
+        # Delegation tool registered after intern_registry init (see __init__)
 
     @staticmethod
     def _build_jira_client(config: dict):
@@ -1593,6 +1608,24 @@ class Orchestrator:
         # Build intern backstory from JD
         responsibilities = "\n".join(f"- {r}" for r in intern.responsibilities)
         tools_desc = self.tool_registry.get_tool_descriptions_for_prompt(intern)
+        # If intern has delegate tool, list available colleagues
+        delegate_section = ""
+        if "delegate" in [t.lower() for t in intern.tools_allowed]:
+            other_interns = [
+                i for i in self.intern_registry.list_interns()
+                if i.name.lower() != intern.name.lower()
+            ]
+            if other_interns:
+                colleague_list = "\n".join(
+                    f"- {i.name} ({i.role}) — tools: {', '.join(i.tools_allowed)}"
+                    for i in other_interns
+                )
+                delegate_section = (
+                    f"\n\nYou can delegate subtasks to other interns using the "
+                    f"\"Delegate to Intern\" tool. Available colleagues:\n{colleague_list}\n"
+                    f"Use delegation when you need expertise or tools you don't have."
+                )
+
         backstory = (
             f"You are {intern.name}, a {intern.role}.\n\n"
             f"Responsibilities:\n{responsibilities}\n\n"
@@ -1601,6 +1634,7 @@ class Orchestrator:
             f"Tools available:\n{tools_desc}\n\n"
             f"IMPORTANT: For write operations (creating/updating tasks, projects, notes, etc.), "
             f"respond with ONLY a JSON action plan. For questions and read-only requests, answer directly."
+            f"{delegate_section}"
         )
 
         # Get CrewAI tools for this intern

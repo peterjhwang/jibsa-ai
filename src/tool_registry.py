@@ -77,6 +77,10 @@ TOOL_CATALOG: dict[str, dict] = {
             "create_page", "update_page", "add_comment",
         ],
     },
+    "delegate": {
+        "description": "Delegate a subtask to another intern and get their response",
+        "write_actions": [],  # read-only tool
+    },
 }
 
 

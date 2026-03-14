@@ -83,6 +83,6 @@ integrations:
   confluence:
     enabled: false
   google_calendar:
-    enabled: false
+    enabled: true
   gmail:
-    enabled: false
+    enabled: true

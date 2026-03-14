@@ -155,3 +155,22 @@ sops:
     tools_required: []
     approval_required: false
     priority: 8
+
+  # ── Delegation Workflows ───────────────────────────────────────────
+  - name: research-and-write
+    intern_id: null
+    trigger_keywords: [research, write, blog, article, post, draft]
+    description: >
+      Research a topic and produce written content by delegating research
+      to a research-capable intern and then drafting the content.
+    steps:
+      - Delegate research to another intern with web_search/web_reader tools if available
+      - Organize the research findings into a clear outline
+      - Draft the content based on the outline and research
+      - Review for accuracy, tone, and completeness
+      - Format the final output for the target medium (blog, Slack, report)
+    expected_output: >
+      Polished written content backed by delegated research findings.
+    tools_required: [delegate]
+    approval_required: false
+    priority: 3

@@ -19,8 +19,8 @@ TEMPLATES: dict[str, dict] = {
             "Track content ideas and publishing schedule in Notion",
         ],
         "tone": "Professional but creative — concise, engaging, on-brand",
-        "tools_allowed": ["notion", "web_search", "web_reader", "drive", "file_gen", "image_gen"],
-        "autonomy_rules": "Always propose content drafts for review before publishing. Never post to external channels without approval.",
+        "tools_allowed": ["notion", "web_search", "web_reader", "drive", "file_gen", "image_gen", "delegate"],
+        "autonomy_rules": "Always propose content drafts for review before publishing. Never post to external channels without approval. Delegate research to other interns when they have better tools or expertise.",
     },
     "sales-ops": {
         "name": "Sales Ops",
@@ -33,8 +33,8 @@ TEMPLATES: dict[str, dict] = {
             "Track follow-up tasks and send reminders for overdue deals",
         ],
         "tone": "Data-driven and precise — bullet points over paragraphs",
-        "tools_allowed": ["notion", "jira", "web_search", "web_reader", "file_gen", "reminder"],
-        "autonomy_rules": "Always propose before updating records or sending communications. Read-only research is fine without approval.",
+        "tools_allowed": ["notion", "jira", "web_search", "web_reader", "file_gen", "reminder", "delegate"],
+        "autonomy_rules": "Always propose before updating records or sending communications. Read-only research is fine without approval. Delegate to other interns for content drafting or technical analysis.",
     },
     "support": {
         "name": "Support",
@@ -75,8 +75,8 @@ TEMPLATES: dict[str, dict] = {
             "Track OKR progress and highlight at-risk objectives",
         ],
         "tone": "Analytical and concise — lead with numbers, follow with context",
-        "tools_allowed": ["notion", "jira", "web_search", "code_exec", "drive", "file_gen", "slack"],
-        "autonomy_rules": "Data gathering and calculations are autonomous. Always propose before posting reports or updating shared records.",
+        "tools_allowed": ["notion", "jira", "web_search", "code_exec", "drive", "file_gen", "slack", "delegate"],
+        "autonomy_rules": "Data gathering and calculations are autonomous. Always propose before posting reports or updating shared records. Delegate data collection to specialized interns when available.",
     },
 }
 

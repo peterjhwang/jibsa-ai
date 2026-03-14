@@ -81,6 +81,74 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 |---------|-----------------|
 | `✅`, `yes`, `approved`, `go`, `go ahead`, `do it`, `proceed` | `❌`, `no`, `cancel`, `stop`, `revise`, `change` |
 
+## Use Cases
+
+### Morning Briefing
+> Enable `morning_briefing` in `settings.yaml` — fires Mon-Fri at 8 AM.
+
+Jibsa posts a daily digest to your Slack channel:
+- Today's calendar events for everyone who connected Google
+- Overdue Notion tasks
+- Open Jira issues assigned to your team
+
+No one has to ask "what's on today?" — it's there when you open Slack.
+
+### Async Standup
+> `hire from template standup`
+
+The Standup Bot intern posts daily prompts, collects updates, and compiles a summary. Works across time zones — team members reply when they're online, and the bot threads everything together. Blockers get flagged automatically.
+
+```
+@jibsa standup bot post today's standup
+@jibsa standup bot summarize yesterday's updates
+```
+
+### Deal Tracking & Sales Ops
+> `hire from template sales-ops`
+
+The Sales Ops intern keeps your pipeline clean:
+- Researches prospects before calls (web search + Drive docs)
+- Updates Jira tickets and Notion CRM records after meetings
+- Generates weekly pipeline reports as CSV/Markdown
+- Sets reminders for follow-ups on stale deals
+
+```
+@jibsa sales ops research Acme Corp before my 2pm call
+@jibsa sales ops create a pipeline report for this week
+```
+
+### Support Triage
+> `hire from template support`
+
+The Support intern monitors Jira, categorizes tickets by urgency, drafts first responses from your Confluence knowledge base, and escalates critical issues with a context summary.
+
+```
+@jibsa support triage the open tickets in SUPPORT project
+@jibsa support draft a response for SUPPORT-142
+```
+
+### Content Marketing
+> `hire from template content`
+
+The Content intern drafts posts, researches trends, generates images, and tracks your content calendar in Notion. Review and approve — nothing goes out without your sign-off.
+
+```
+@jibsa content write 3 LinkedIn posts about our Series A
+@jibsa content research what competitors are posting about AI
+```
+
+### Weekly Metrics & Reporting
+> `hire from template metrics`
+
+The Metrics Reporter gathers data from Notion, Jira, and your integrations, calculates trends, and posts formatted reports to Slack. Runs on a schedule or on demand.
+
+```
+@jibsa metrics reporter generate this week's KPI dashboard
+@jibsa metrics reporter which OKRs are at risk?
+```
+
+---
+
 ## Features
 
 ### Multi-Intern System

@@ -1,6 +1,6 @@
 # Google OAuth Setup (Per-User Credentials)
 
-Unlike team-shared integrations (Notion, Jira), Google Calendar and Gmail require **per-user** authorization. Each team member connects their own Google account via an OAuth flow managed through Slack DMs.
+Unlike team-shared integrations (Notion, Jira), Google Workspace (Calendar, Gmail, Drive) requires **per-user** authorization. One OAuth flow connects all three. Each team member connects their own Google account via Slack DMs.
 
 ---
 
@@ -13,6 +13,7 @@ Unlike team-shared integrations (Notion, Jira), Google Calendar and Gmail requir
 4. Google shows an authorization code
 5. User pastes the code back in the Jibsa DM
 6. Jibsa exchanges the code for tokens and stores them encrypted
+7. Calendar, Gmail, and Drive are all connected in one step
 ```
 
 Tokens are encrypted with Fernet (AES-128-CBC + HMAC-SHA256) and stored in a local SQLite database. Only the user's own tokens are used for their requests.
@@ -34,6 +35,7 @@ Tokens are encrypted with Fernet (AES-128-CBC + HMAC-SHA256) and stored in a loc
 In the same project, go to **APIs & Services** > **Library** and enable:
 - **Google Calendar API**
 - **Gmail API**
+- **Google Drive API**
 
 ---
 

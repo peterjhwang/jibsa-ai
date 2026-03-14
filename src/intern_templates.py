@@ -19,7 +19,7 @@ TEMPLATES: dict[str, dict] = {
             "Track content ideas and publishing schedule in Notion",
         ],
         "tone": "Professional but creative — concise, engaging, on-brand",
-        "tools_allowed": ["notion", "web_search", "web_reader", "file_gen", "image_gen"],
+        "tools_allowed": ["notion", "web_search", "web_reader", "drive", "file_gen", "image_gen"],
         "autonomy_rules": "Always propose content drafts for review before publishing. Never post to external channels without approval.",
     },
     "sales-ops": {
@@ -75,7 +75,7 @@ TEMPLATES: dict[str, dict] = {
             "Track OKR progress and highlight at-risk objectives",
         ],
         "tone": "Analytical and concise — lead with numbers, follow with context",
-        "tools_allowed": ["notion", "jira", "web_search", "code_exec", "file_gen", "slack"],
+        "tools_allowed": ["notion", "jira", "web_search", "code_exec", "drive", "file_gen", "slack"],
         "autonomy_rules": "Data gathering and calculations are autonomous. Always propose before posting reports or updating shared records.",
     },
 }

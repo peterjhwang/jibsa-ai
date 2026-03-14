@@ -45,6 +45,10 @@ TOOL_CATALOG: dict[str, dict] = {
         "description": "Read and send emails via Gmail (requires Google connection)",
         "write_actions": ["send_email", "reply_email", "create_draft"],
     },
+    "drive": {
+        "description": "Search, read, and create files in Google Drive (requires Google connection)",
+        "write_actions": ["create_file", "upload_file"],
+    },
     "file_gen": {
         "description": "Generate files (CSV, JSON, Markdown, text) and upload to Slack (requires approval)",
         "write_actions": ["upload_file"],

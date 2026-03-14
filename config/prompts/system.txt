@@ -81,6 +81,10 @@ Valid gmail actions:
 - reply_email — params: message_id, body
 - create_draft — params: to, subject, body
 
+Valid drive actions:
+- create_file — params: name, content, mime_type (default "text/plain"), folder_id (optional)
+- upload_file — params: name, content (base64), mime_type, folder_id (optional)
+
 The user will review the plan and approve (✅ yes / proceed) or reject (❌ no / cancel / revise).
 
 **For READ-ONLY REQUESTS** — answer directly from the context already injected above. Never say you need MCP, tools, or a server connection to answer.

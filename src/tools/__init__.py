@@ -5,8 +5,9 @@ from .code_exec_tool import CodeExecTool
 from .slack_tool import SlackTool
 from .calendar_tool import CalendarReadTool
 from .gmail_tool import GmailReadTool
+from .drive_tool import DriveReadTool
 
 __all__ = [
     "NotionReadTool", "WebSearchTool", "CodeExecTool", "SlackTool",
-    "CalendarReadTool", "GmailReadTool",
+    "CalendarReadTool", "GmailReadTool", "DriveReadTool",
 ]

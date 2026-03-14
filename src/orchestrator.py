@@ -37,6 +37,7 @@ from .tools.code_exec_tool import CodeExecTool
 from .tools.slack_tool import SlackTool
 from .tools.calendar_tool import CalendarReadTool
 from .tools.gmail_tool import GmailReadTool
+from .tools.drive_tool import DriveReadTool
 from .tools.file_gen_tool import FileGenTool
 from .tools.image_gen_tool import ImageGenTool
 from .tools.reminder_tool import ReminderTool
@@ -276,6 +277,9 @@ class Orchestrator:
         )
         self.tool_registry.register_crewai_tool(
             "gmail", GmailReadTool.create(self.google_oauth)
+        )
+        self.tool_registry.register_crewai_tool(
+            "drive", DriveReadTool.create(self.google_oauth)
         )
 
         # File generation tool (write tool — proposes action plans)
@@ -1647,6 +1651,8 @@ class Orchestrator:
                 result = self._execute_google_step(step, "calendar")
             elif service == "gmail":
                 result = self._execute_google_step(step, "gmail")
+            elif service == "drive":
+                result = self._execute_google_step(step, "drive")
             else:
                 result = {"ok": False, "error": f"'{service}' not connected yet"}
             results.append((step, result))
@@ -1808,9 +1814,12 @@ class Orchestrator:
             if service == "calendar":
                 from .integrations.google_calendar_client import GoogleCalendarClient
                 client = GoogleCalendarClient(creds)
-            else:
+            elif service == "gmail":
                 from .integrations.gmail_client import GmailClient
                 client = GmailClient(creds)
+            else:
+                from .integrations.google_drive_client import GoogleDriveClient
+                client = GoogleDriveClient(creds)
 
             result = client.execute_step(step)
             self._google_circuit.record_success()
@@ -2015,7 +2024,8 @@ class Orchestrator:
                 self.slack.chat_postMessage(
                     channel=dm_channel,
                     text=(
-                        "*Connect Google Account*\n\n"
+                        "*Connect Google Workspace*\n\n"
+                        "This connects Calendar, Gmail, and Drive in one step.\n\n"
                         "1. Click the link below to authorize Jibsa:\n"
                         f"   {auth_url}\n\n"
                         "2. After authorizing, Google will show you a code.\n"
@@ -2104,7 +2114,7 @@ class Orchestrator:
         if service == "google":
             result = self.google_oauth.exchange_code(user, code)
             if result["ok"]:
-                self._post(channel, thread_ts, "Connected to Google! Your Calendar and Gmail are now available to your interns.")
+                self._post(channel, thread_ts, "Connected to Google Workspace! Calendar, Gmail, and Drive are now available to your interns.")
                 self.audit.log(action="service_connected", user_id=user, service="google")
             else:
                 self._post(channel, thread_ts, f"Authorization failed: {result['error']}\n\nSay `connect google` to try again.")

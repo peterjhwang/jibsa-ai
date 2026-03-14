@@ -23,12 +23,14 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "google"
 
-# Default scopes — can be overridden via config
+# Default scopes — Google Workspace bundle (Calendar + Gmail + Drive)
 DEFAULT_SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file",
 ]
 
 # OOB redirect URI for installed apps

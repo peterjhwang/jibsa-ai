@@ -135,6 +135,7 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 | **Slack** | Write (approval) | Post messages to Slack channels |
 | **Calendar** | Read + Write | View, create, update, delete Google Calendar events (per-user OAuth) |
 | **Gmail** | Read + Write | Search, read, send, reply, draft emails (per-user OAuth) |
+| **Drive** | Read + Write | Search, read, create files in Google Drive (per-user OAuth) |
 
 ### Integrations
 
@@ -148,8 +149,7 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 | **ZenRows** — Web page fetching with JS rendering and anti-bot bypass | ✅ Live |
 | **Nano Banana 2** — AI image generation via Google Gemini | ✅ Live |
 | **APScheduler** — Background scheduler for timed reminders | ✅ Live |
-| **Google Calendar** — Per-user OAuth, event management, daily briefings | ✅ Live |
-| **Gmail** — Per-user OAuth, read/send/reply, drafts | ✅ Live |
+| **Google Workspace** — Calendar, Gmail, Drive via single per-user OAuth flow | ✅ Live |
 | **Scheduled Jobs** — Morning briefing, EOD review, weekly digest | ✅ Live |
 
 ### Notion Second Brain (Optional)
@@ -185,12 +185,13 @@ Read tools let agents search Jira (JQL) and Confluence (CQL) during reasoning. W
 
 ### Per-User Credentials (Google OAuth)
 
-Team-shared integrations (Notion, Jira, Confluence) use a single API token in `.env`. Personal services (Google Calendar, Gmail) use **per-user OAuth** — each team member connects their own account:
+Team-shared integrations (Notion, Jira, Confluence) use a single API token in `.env`. Google Workspace (Calendar, Gmail, Drive) uses **per-user OAuth** — one flow connects all three:
 
 ```
 @jibsa connect google    → Jibsa DMs you an OAuth link
                          → you authorize and paste the code back
                          → tokens stored encrypted (Fernet + SQLite)
+                         → Calendar, Gmail, and Drive all connected
 ```
 
 Credentials are encrypted at rest with AES-128-CBC and keyed by Slack user ID — one user cannot access another's tokens. See [Google OAuth Setup](docs/google-oauth-setup.md) for details.
@@ -323,7 +324,8 @@ jibsa-ai/
 │   │   ├── reminder_tool.py        # CrewAI BaseTool: scheduled reminders
 │   │   ├── slack_tool.py           # CrewAI BaseTool: Slack post (write, needs approval)
 │   │   ├── calendar_tool.py       # CrewAI BaseTool: Google Calendar (per-user OAuth)
-│   │   └── gmail_tool.py          # CrewAI BaseTool: Gmail (per-user OAuth)
+│   │   ├── gmail_tool.py          # CrewAI BaseTool: Gmail (per-user OAuth)
+│   │   └── drive_tool.py          # CrewAI BaseTool: Google Drive (per-user OAuth)
 │   └── integrations/
 │       ├── notion_client.py        # Thin Notion SDK wrapper (retry/backoff)
 │       ├── notion_second_brain.py  # Schema-free PARA operations
@@ -334,7 +336,8 @@ jibsa-ai/
 │       ├── credential_store.py    # Fernet-encrypted SQLite per-user credential store
 │       ├── google_oauth.py        # Google OAuth2 OOB flow (per-user tokens)
 │       ├── google_calendar_client.py  # Google Calendar API v3 wrapper
-│       └── gmail_client.py        # Gmail API v1 wrapper
+│       ├── gmail_client.py        # Gmail API v1 wrapper
+│       └── google_drive_client.py # Google Drive API v3 wrapper
 │
 ├── config/
 │   ├── settings.yaml           # LLM, channel, timezone, approval, integrations
@@ -355,7 +358,7 @@ jibsa-ai/
 │   └── doctor.sh               # Health check (runtime, deps, env, config)
 │
 ├── data/                       # SQLite credential store (gitignored)
-├── tests/                      # pytest test suite (495 passing)
+├── tests/                      # pytest test suite (505 passing)
 ├── docs/                       # Setup guides
 ├── assets/                     # Logo and images
 ├── requirements.in             # Loose dependency constraints (edit this)
@@ -439,7 +442,7 @@ graph TD
 ./scripts/test.sh --cov=src --cov-report=term-missing
 ```
 
-495 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 13 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
+505 tests covering: routing, approval, CrewAI runner, hire flow, intern model, tool registry, all 14 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
 
 ---
 

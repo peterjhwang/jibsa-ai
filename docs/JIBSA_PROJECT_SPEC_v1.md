@@ -36,7 +36,8 @@ Any Slack user can create custom AI interns (with job descriptions + tools + app
 ### 1. Core Orchestration – CrewAI Integration ✅ DONE
 - [x] Install CrewAI + create Agent/Task/Crew per intern request
 - [x] Map Job Description → CrewAI Role + Backstory + Goals
-- [x] Task decomposition: Plan → Human Approve → Execute (tools + Claude)
+- [x] Ambiguity detection: agents ask clarifying questions before proposing action plans for vague/incomplete requests
+- [x] Task decomposition: Clarify (if needed) → Plan → Human Approve → Execute (tools + Claude)
 - [x] Per-intern memory (short-term list + Notion long-term)
 - [ ] Test with 3 sample interns (content, dev, ops) — manual end-to-end
 

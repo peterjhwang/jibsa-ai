@@ -52,10 +52,10 @@ Slack message
 ### Key Concepts
 
 - **Orchestrator** (`orchestrator.py`): Central entry point. Routes messages, manages history, dispatches to hire flow / interns / Jibsa.
-- **CrewRunner** (`crew_runner.py`): Builds CrewAI Agent + Task + Crew per request. Three entry points: `run_for_jibsa()`, `run_for_intern()`, `run_for_hire()`.
+- **CrewRunner** (`crew_runner.py`): Builds CrewAI Agent + Task + Crew per request. Three entry points: `run_for_jibsa()`, `run_for_intern()`, `run_for_hire()`. Agents are instructed to clarify ambiguous requests before proposing actions.
 - **InternJD** (`models/intern.py`): Dataclass representing an intern's Job Description. Includes validation, per-intern memory, and formatting.
 - **ToolRegistry** (`tool_registry.py`): Manages tool catalog + CrewAI instances. Filters tools per intern based on JD. Checks write-action permissions.
-- **Propose-Approve**: Read-only tools execute during CrewAI reasoning. Write operations produce a JSON `action_plan` → Slack Block Kit buttons → execute after approval.
+- **Clarify-Propose-Approve**: When a request is ambiguous or missing critical details, agents ask a clarifying question before acting. Read-only tools execute during CrewAI reasoning. Write operations produce a JSON `action_plan` → Slack Block Kit buttons → execute after approval.
 
 ### Adding a New Tool
 

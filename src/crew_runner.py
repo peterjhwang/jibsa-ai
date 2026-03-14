@@ -114,7 +114,8 @@ class CrewRunner:
             role=f"{self._persona['name']} — AI Steward (집사)",
             goal=(
                 "Help the user by answering questions, managing tasks, and coordinating work. "
-                "For write operations, ALWAYS respond with a JSON action plan for approval."
+                "If a request is ambiguous or missing critical details, ask a brief clarifying question "
+                "before acting. For write operations, ALWAYS respond with a JSON action plan for approval."
             ),
             backstory=backstory,
             tools=tools or [],
@@ -168,6 +169,8 @@ class CrewRunner:
             role=f"{intern_name} — {intern_role}",
             goal=(
                 f"Complete tasks as {intern_name}, a {intern_role}. "
+                "If a request is ambiguous or missing critical details (e.g. no deadline, unclear scope, "
+                "multiple interpretations), ask a brief clarifying question before proposing an action. "
                 "For any operation that modifies external state (creating tasks, updating records, etc.), "
                 "respond with a JSON action plan for approval. "
                 "For read-only queries and conversations, respond directly."
@@ -290,11 +293,13 @@ class CrewRunner:
             task = Task(
                 description=(
                     f"{user_message}\n\n"
-                    "IMPORTANT: If you need to modify external state, respond with a JSON action plan.\n"
+                    "IMPORTANT: If the request is ambiguous or missing critical details, "
+                    "ask a clarifying question before acting.\n"
+                    "If you need to modify external state, respond with a JSON action plan.\n"
                     '{"type": "action_plan", "summary": "...", "steps": [...]}\n\n'
                     "For read-only queries, contribute your analysis directly."
                 ),
-                expected_output="Your contribution to the team task",
+                expected_output="A clarifying question, your analysis, or a JSON action plan",
                 agent=agent,
             )
             tasks.append(task)
@@ -328,17 +333,22 @@ class CrewRunner:
         task = Task(
             description=(
                 f"{user_message}\n\n"
-                "IMPORTANT: If you need to modify external state (create/update/delete anything), "
-                "respond with ONLY a JSON action plan in this format:\n"
+                "IMPORTANT: Choose ONE of these response modes:\n\n"
+                "1. CLARIFY — If the request is ambiguous, missing critical details, or could be "
+                "interpreted multiple ways, ask a short clarifying question. Examples of ambiguity: "
+                "no target database specified, unclear priority/deadline, vague scope like 'update the thing', "
+                "or multiple possible actions. Do NOT guess — ask.\n\n"
+                "2. ACTION PLAN — If you need to modify external state (create/update/delete anything) "
+                "AND the request is clear enough to act on, respond with ONLY a JSON action plan:\n"
                 '{"type": "action_plan", "summary": "...", "steps": [{"service": "...", '
                 '"action": "...", "params": {...}, "description": "..."}], "needs_approval": true}\n\n'
                 "Valid services: notion, web_search, code_exec\n"
                 "Valid notion actions: create_task, update_task_status, create_project, create_note, "
                 "create_journal_entry, log_expense, log_workout, create_database, create_entry, "
                 "create_standalone_page, add_page_content\n\n"
-                "For read-only queries, answer directly using your tools and context."
+                "3. DIRECT ANSWER — For read-only queries, answer directly using your tools and context."
             ),
-            expected_output="Either a helpful response or a JSON action plan for approval",
+            expected_output="A clarifying question, a helpful response, or a JSON action plan for approval",
             agent=agent,
         )
 

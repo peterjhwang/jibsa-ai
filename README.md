@@ -35,6 +35,10 @@ You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
                 └───────┬────────┘  (web search, Notion, etc.)
                         │
                 ┌───────▼────────┐
+                │  🤔 Clarify?   │  if ambiguous → asks a question first
+                └───────┬────────┘  (you reply, conversation continues)
+                        │
+                ┌───────▼────────┐
                 │  📋 Propose    │  posts plan with ✅/❌ buttons
                 └───────┬────────┘
                         │  ← you click ✅ Approve
@@ -75,6 +79,7 @@ Plans can be approved via **Block Kit buttons** (✅ Approve / ❌ Reject) or te
 
 ### Multi-Intern System
 - **Conversational hiring** — describe what you need, Jibsa helps you write a complete Job Description
+- **Ambiguity detection** — interns ask clarifying questions when a request is vague or missing critical details before proposing an action
 - **JD validation** — enforces name, role, responsibilities, tool assignments
 - **Interactive JD editing** — `edit alex's jd` starts a session to modify any field via natural language or direct commands
 - **Per-intern tools** — each intern only sees their assigned tools
@@ -302,6 +307,8 @@ graph TD
     CrewRunner -->|"Agent + Task + Crew"| CrewAI["CrewAI\n(Claude / GPT-4 / Gemini)"]
 
     CrewAI -->|tool call| Tools["Tools\nNotion · Web Search · Web Reader\nCode Exec · File Gen · Image Gen"]
+    CrewAI -->|ambiguous| Clarify["Clarify\nAsk user for details"]
+    Clarify -->|user replies| CrewAI
     CrewAI -->|action plan| Approval["approval.py\nBlock Kit ✅ / ❌"]
 
     Approval -->|approved| Execute["Execute Plan\nNotion writes · Slack posts\nFile uploads · Image gen · Reminders"]
@@ -318,7 +325,7 @@ graph TD
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Orchestration | CrewAI | Native multi-provider LLM, Agent/Task/Crew model, built-in tool use |
+| Orchestration | CrewAI | Native multi-provider LLM, Agent/Task/Crew model, built-in tool use, ambiguity detection |
 | LLM support | Multi-provider | `anthropic/claude`, `openai/gpt-4o`, `google/gemini` via CrewAI |
 | Slack transport | Socket Mode | No public URL or reverse proxy needed |
 | Approval gate | Block Kit buttons + text | Interactive ✅/❌ buttons with text fallback, auto-expiring TTL |

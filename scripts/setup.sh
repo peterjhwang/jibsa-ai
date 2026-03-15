@@ -61,10 +61,15 @@ else
     ok "pytest installed"
 fi
 
-# ── 6. Copy .env if missing ─────────────────────────────────────────────────
+# ── 6. Copy config files if missing ──────────────────────────────────────────
 if [ ! -f .env ] && [ -f .env.example ]; then
     cp .env.example .env
     info "Copied .env.example → .env  (fill in your secrets)"
+fi
+
+if [ ! -f config/settings.yaml ] && [ -f config/settings.yaml.example ]; then
+    cp config/settings.yaml.example config/settings.yaml
+    info "Copied config/settings.yaml.example → config/settings.yaml"
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────

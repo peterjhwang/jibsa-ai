@@ -269,6 +269,11 @@ def step_encryption_key() -> None:
 def step_validate() -> None:
     _section("Validation")
 
+    settings_example = _ROOT / "config" / "settings.yaml.example"
+    if not _SETTINGS_FILE.exists() and settings_example.exists():
+        shutil.copy(settings_example, _SETTINGS_FILE)
+        _ok("Created config/settings.yaml from example")
+
     if _SETTINGS_FILE.exists():
         _ok("config/settings.yaml exists")
         try:
@@ -280,7 +285,7 @@ def step_validate() -> None:
         except Exception as e:
             _fail(f"settings.yaml validation failed: {e}")
     else:
-        _fail("config/settings.yaml not found")
+        _fail("config/settings.yaml not found — copy config/settings.yaml.example")
 
 
 def step_doctor() -> None:

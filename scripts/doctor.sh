@@ -119,6 +119,11 @@ _check_var ZENROWS_API_KEY false "needed for web reader + search fallback"
 
 # ── Config ───────────────────────────────────────────────────────────────────
 printf '\n\033[1m[Config]\033[0m\n'
+if [ ! -f config/settings.yaml ] && [ -f config/settings.yaml.example ]; then
+    cp config/settings.yaml.example config/settings.yaml
+    check "Created config/settings.yaml from example"
+fi
+
 if [ -f config/settings.yaml ]; then
     check "config/settings.yaml exists"
     # Validate via pydantic

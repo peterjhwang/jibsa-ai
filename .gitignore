@@ -1,4 +1,5 @@
 .env
+config/settings.yaml
 config/notion_databases.yaml
 __pycache__/
 *.py[cod]

@@ -11,6 +11,7 @@ Usage:
 import atexit
 import logging
 import os
+import re
 import signal
 import sys
 import tempfile
@@ -100,6 +101,26 @@ def create_app(config: dict) -> tuple[App, Orchestrator]:
         user = body["user"]["id"]
         orchestrator.handle_button_action("reject_plan", channel, thread_ts, user, respond)
 
+    # Block Kit "View JD" buttons (dynamic action_id per intern: view_jd_alex, view_jd_sarah, etc.)
+    @slack_app.action(re.compile(r"^view_jd_.+"))
+    def handle_view_jd(ack, body):
+        ack()
+        action_id = body["actions"][0]["action_id"]
+        intern_name = action_id.replace("view_jd_", "")
+        channel = body["channel"]["id"]
+        thread_ts = body["message"].get("thread_ts") or body["message"]["ts"]
+        try:
+            intern = orchestrator.intern_registry.get_intern(intern_name)
+            if intern:
+                orchestrator._show_jd_blocks(channel, thread_ts, intern)
+            else:
+                slack_app.client.chat_postMessage(
+                    channel=channel, thread_ts=thread_ts,
+                    text=f"Intern '{intern_name}' not found.",
+                )
+        except Exception:
+            logger.error("Failed to handle view_jd for %s", intern_name, exc_info=True)
+
     # Verify the bot is responding to the right channel
     # (Socket Mode delivers all events; filter handled by Slack app subscription)
     logger.info("Jibsa will listen in #%s", target_channel)
@@ -131,18 +152,38 @@ def main():
 
     handler = SocketModeHandler(slack_app, app_token)
 
+    _shutting_down = False
+
     def _shutdown(sig, frame):
+        nonlocal _shutting_down
+        if _shutting_down:
+            # Second signal — force exit immediately
+            logger.warning("Forced exit.")
+            os._exit(1)
+        _shutting_down = True
+
         signame = signal.Signals(sig).name
         logger.info("Received %s — shutting down gracefully...", signame)
-        orchestrator.audit.close()
-        orchestrator.intern_store.close()
-        orchestrator.sop_store.close()
-        orchestrator.credential_store.close()
+
+        # Close stores (fast, non-blocking)
+        for store in ("audit", "intern_store", "sop_store", "credential_store"):
+            try:
+                getattr(orchestrator, store).close()
+            except Exception:
+                pass
+
         orchestrator.reminder_scheduler.shutdown()
-        handler.close()
+
+        # SocketModeHandler.close() can hang — disconnect and force exit
+        try:
+            if handler.client and handler.client.is_connected():
+                handler.client.disconnect()
+        except Exception:
+            pass
+
         _cleanup_temp_files()
         logger.info("Shutdown complete.")
-        sys.exit(0)
+        os._exit(0)
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)

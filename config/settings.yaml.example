@@ -1,0 +1,88 @@
+llm:
+  # LLM provider: "anthropic", "openai", or "google"
+  # CrewAI uses "provider/model" format internally
+  provider: "anthropic"
+  model: "claude-sonnet-4-20250514"
+  temperature: 0.7
+  max_tokens: 4096
+  # Examples:
+  #   provider: "openai",  model: "gpt-4o"
+  #   provider: "google",  model: "gemini-2-0-flash"
+
+jibsa:
+  # Slack channel where Jibsa listens and responds
+  channel_name: "jibsa"
+
+  # Timezone for all scheduling and date formatting
+  timezone: "UTC"
+
+  # Maximum conversation history kept per thread (message pairs)
+  max_history: 20
+
+  # Claude subprocess timeout in seconds
+  claude_timeout: 120
+
+  # Maximum concurrent Claude subprocess calls
+  claude_max_concurrent: 3
+
+  # CrewAI execution limits
+  crew_timeout: 300       # Max seconds for a single crew execution
+  crew_max_iter: 10       # Max reasoning iterations per crew
+
+  # Code execution sandbox limits
+  code_exec_timeout: 30   # Seconds before code exec is killed
+  code_exec_max_output: 4000  # Max chars of stdout/stderr captured
+
+  # Database paths — override for Railway volume mount (/data/)
+  # Local dev uses defaults: data/jibsa.db, data/credentials.db
+  # intern_db_path: "/data/jibsa.db"
+  # credential_db_path: "/data/credentials.db"
+
+scheduler:
+  morning_briefing:
+    enabled: false        # Daily briefing: calendar, overdue tasks, Jira issues
+    cron: "0 8 * * 1-5"  # Mon-Fri 8 AM
+  eod_review:
+    enabled: false        # End-of-day: today's actions, tomorrow's schedule
+    cron: "0 17 * * 1-5" # Mon-Fri 5 PM
+  overdue_alerts:
+    enabled: false        # Overdue task alerts (requires Notion)
+    cron: "0 10 * * 1-5" # Mon-Fri 10 AM
+  weekly_digest:
+    enabled: false        # Weekly activity summary
+    cron: "0 16 * * 5"   # Friday 4 PM
+
+approval:
+  # Keywords that trigger plan execution (word-boundary matched)
+  approve_keywords:
+    - "✅"
+    - "yes"
+    - "approved"
+    - "go"
+    - "go ahead"
+    - "do it"
+    - "proceed"
+  # Keywords that cancel and request revision (word-boundary matched)
+  reject_keywords:
+    - "❌"
+    - "no"
+    - "cancel"
+    - "stop"
+    - "revise"
+    - "change"
+  # Pending plans expire after this many seconds (default: 1 hour)
+  ttl_seconds: 3600
+
+# Integrations — set enabled: true and configure env vars to activate
+integrations:
+  notion:
+    enabled: false
+    # parent_page_id: "your-page-id"  # Set via NOTION_PARENT_PAGE_ID env var or here
+  jira:
+    enabled: false
+  confluence:
+    enabled: false
+  google_calendar:
+    enabled: false
+  gmail:
+    enabled: false

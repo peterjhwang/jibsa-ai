@@ -70,10 +70,12 @@ You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
 | `@jibsa show sops` | List all SOPs |
 | `@jibsa show sop weekly-report` | View a specific SOP's details |
 | `@jibsa remove sop weekly-report` | Delete a SOP |
-| **Google OAuth** | |
+| **Connections** | |
 | `@jibsa connect google` | Start per-user Google OAuth flow (DM-based) |
+| `@jibsa connect notion` | Start per-user Notion OAuth flow (DM-based) |
 | `@jibsa google token <JSON>` | Store tokens from `scripts/google_auth.py` (admin) |
 | `@jibsa disconnect google` | Revoke and delete stored Google tokens |
+| `@jibsa disconnect notion` | Delete stored Notion tokens and database registry |
 | `@jibsa my connections` | List your connected services |
 | **General** | |
 | `@jibsa help` | Contextual help with all commands |
@@ -296,7 +298,7 @@ The Metrics Reporter gathers data from Notion, Jira, and your integrations, calc
 
 | Tool | Type | Description |
 |------|------|-------------|
-| **Notion** | Read + Write | Query and manage tasks, projects, notes, journals, expenses, workouts (26 databases) |
+| **Notion** | Read + Write | Query and manage tasks, projects, notes, journals, expenses, workouts (per-user OAuth or global token) |
 | **Jira** | Read + Write | Search issues (JQL), create/update issues, transitions, comments, worklogs |
 | **Confluence** | Read + Write | Search pages (CQL), create/update pages, add comments |
 | **Web Search** | Read-only | DuckDuckGo search with ZenRows SERP fallback — rate limited |
@@ -316,7 +318,7 @@ The Metrics Reporter gathers data from Notion, Jira, and your integrations, calc
 | Integration | Status |
 |-------------|--------|
 | **Slack** — Socket Mode bot, threaded conversations, Block Kit buttons | ✅ Live |
-| **Notion** — Schema-free PARA Second Brain (26 databases, optional) | ✅ Live |
+| **Notion** — Schema-free PARA Second Brain (global token or per-user OAuth) | ✅ Live |
 | **Jira** — Issue search (JQL), create/update, transitions, comments, worklogs | ✅ Live |
 | **Confluence** — Page search (CQL), create/update pages, comments | ✅ Live |
 | **CrewAI** — Multi-provider LLM orchestration (Claude, GPT-4, Gemini) | ✅ Live |
@@ -328,13 +330,19 @@ The Metrics Reporter gathers data from Notion, Jira, and your integrations, calc
 
 ### Notion Second Brain (Optional)
 
-Notion is **not required** — Jibsa works out of the box with intern JDs and credentials stored in local SQLite. Enable Notion in `config/settings.yaml` to connect your workspace as a Second Brain with **schema-free** architecture. Add any database by editing `config/notion_databases.yaml`:
+Notion is **not required** — Jibsa works out of the box with intern JDs and credentials stored in local SQLite. Two connection modes are available:
+
+**Global token** — a single `NOTION_TOKEN` shares one workspace with all users. Add databases via `config/notion_databases.yaml`:
 
 ```yaml
 - name: Tasks
   id: abc123...
   keywords: [task, todo, action]
 ```
+
+**Per-user OAuth** — each user connects their own workspace via `connect notion`. Databases are auto-discovered from the pages shared during authorization. Set `NOTION_OAUTH_CLIENT_ID` and `NOTION_OAUTH_CLIENT_SECRET` in `.env`.
+
+Both modes can coexist — per-user OAuth takes priority when available, falling back to the global token.
 
 **Available actions:** `create_task`, `update_task_status`, `create_project`, `create_note`, `create_journal_entry`, `log_expense`, `log_workout`
 
@@ -357,18 +365,23 @@ integrations:
 
 Read tools let agents search Jira (JQL) and Confluence (CQL) during reasoning. Write operations go through the standard propose-approve flow. Pre-built SOPs like `ticket-triage` and `sprint-summary` provide structured procedures for common Jira workflows.
 
-### Per-User Credentials (Google OAuth)
+### Per-User Credentials (OAuth)
 
-Team-shared integrations (Notion, Jira, Confluence) use a single API token in `.env`. Google Workspace (Calendar, Gmail, Drive) uses **per-user OAuth** — one flow connects all three:
+Jira and Confluence use a single shared API token in `.env`. Google Workspace and Notion support **per-user OAuth** — each user connects their own account:
 
 ```
 @jibsa connect google    → Jibsa DMs you an OAuth link
                          → you authorize and paste the code back
                          → tokens stored encrypted (Fernet + SQLite)
                          → Calendar, Gmail, and Drive all connected
+
+@jibsa connect notion    → Jibsa DMs you an OAuth link
+                         → you select pages to share and authorize
+                         → token stored encrypted, databases auto-discovered
+                         → your Notion workspace is now available
 ```
 
-Credentials are encrypted at rest with AES-128-CBC and keyed by Slack user ID — one user cannot access another's tokens. See [Google OAuth Setup](docs/google-oauth-setup.md) for details.
+Credentials are encrypted at rest with AES-128-CBC and keyed by Slack user ID — one user cannot access another's tokens. See [Google OAuth Setup](docs/google-oauth-setup.md) and [Notion Setup](docs/notion-setup.md) for details.
 
 ---
 
@@ -515,6 +528,8 @@ jibsa-ai/
 │       ├── sop_store.py           # SQLite backend for SOP storage
 │       ├── credential_store.py    # Fernet-encrypted SQLite per-user credential store
 │       ├── google_oauth.py        # Google OAuth2 Desktop app flow (per-user tokens)
+│       ├── notion_oauth.py        # Notion OAuth flow (per-user tokens)
+│       ├── notion_user_registry.py # Per-user Notion database registry
 │       ├── google_calendar_client.py  # Google Calendar API v3 wrapper
 │       ├── gmail_client.py        # Gmail API v1 wrapper
 │       └── google_drive_client.py # Google Drive API v3 wrapper
@@ -608,7 +623,7 @@ graph TD
 | Intern storage | SQLite | JDs stored locally — no Notion dependency for core functionality |
 | Database routing | Keyword matching | Config-driven — add any Notion database without code changes |
 | SOPs | Keyword → CrewAI Task | SOPs inject structured steps into Task descriptions; keyword scoring + priority for resolution |
-| Personal credentials | Fernet + SQLite | Per-user OAuth tokens encrypted at rest, keyed by Slack user ID |
+| Personal credentials | Fernet + SQLite | Per-user OAuth tokens (Google, Notion) encrypted at rest, keyed by Slack user ID |
 
 ---
 
@@ -628,7 +643,7 @@ graph TD
 ./scripts/test.sh --cov=src --cov-report=term-missing
 ```
 
-618 tests covering: routing, approval, CrewAI runner, hire flow, SOP store, SOP model, SOP registry, SOP creation flow, inter-intern delegation, intern model, tool registry, all 15 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
+618 tests covering: routing, approval, CrewAI runner, hire flow, SOP store, SOP model, SOP registry, SOP creation flow, inter-intern delegation, intern model, tool registry, all 15 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, Notion OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
 
 ---
 
@@ -638,7 +653,8 @@ graph TD
 - [uv](https://github.com/astral-sh/uv) (recommended) or pip
 - A [Slack app](https://api.slack.com/apps) with Socket Mode + Interactivity enabled
 - LLM API key (Anthropic, OpenAI, or Google — depending on `settings.yaml` config)
-- **Optional:** `NOTION_TOKEN` for Notion Second Brain integration (not needed for core functionality)
+- **Optional:** `NOTION_TOKEN` for Notion Second Brain integration (global token mode — not needed for core functionality)
+- **Optional:** `NOTION_OAUTH_CLIENT_ID`, `NOTION_OAUTH_CLIENT_SECRET` for per-user Notion OAuth (each user connects their own workspace)
 - **Optional:** `JIRA_SERVER`, `JIRA_EMAIL`, `JIRA_API_TOKEN` for Jira + Confluence integration
 - **Optional:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` for per-user Google OAuth (Calendar + Gmail)
 - **Optional:** `CREDENTIAL_ENCRYPTION_KEY` for persistent encrypted credential storage

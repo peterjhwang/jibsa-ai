@@ -50,6 +50,8 @@ from .scheduler import ReminderScheduler
 from .integrations.credential_store import CredentialStore
 from .integrations.sop_store import SOPStore
 from .integrations.google_oauth import GoogleOAuthManager
+from .integrations.notion_oauth import NotionOAuthManager
+from .integrations.notion_user_registry import NotionUserRegistry
 from .sop_registry import SOPRegistry
 from .context import current_user_id
 
@@ -214,6 +216,8 @@ class Orchestrator:
         cred_db_path = os.environ.get("CREDENTIAL_DB_PATH") or config.get("jibsa", {}).get("credential_db_path", "data/credentials.db")
         self.credential_store = CredentialStore(db_path=cred_db_path)
         self.google_oauth = GoogleOAuthManager(self.credential_store)
+        self.notion_oauth = NotionOAuthManager(self.credential_store)
+        self.notion_user_registry = NotionUserRegistry(self.credential_store)
 
         # Tool registry with CrewAI tool instances
         self.tool_registry = ToolRegistry()
@@ -283,11 +287,15 @@ class Orchestrator:
 
     def _register_crewai_tools(self) -> None:
         """Create and register CrewAI tool instances."""
-        # Notion read tool (available if Notion is connected)
-        if self.notion:
-            self.tool_registry.register_crewai_tool(
-                "notion", NotionReadTool.create(self.notion)
+        # Notion read tool (per-user OAuth + global fallback)
+        self.tool_registry.register_crewai_tool(
+            "notion", NotionReadTool.create(
+                notion_brain=self.notion,
+                notion_oauth=self.notion_oauth,
+                notion_user_registry=self.notion_user_registry,
+                config=self.config,
             )
+        )
 
         # Web search tool (always available)
         self.tool_registry.register_crewai_tool("web_search", WebSearchTool())
@@ -1834,16 +1842,20 @@ class Orchestrator:
 
             if intern and not self.tool_registry.can_execute(intern, service, step.get("action", "")):
                 result = {"ok": False, "error": f"'{intern.name}' lacks permission for {service}/{step.get('action')}"}
-            elif service == "notion" and self.notion:
-                try:
-                    self._notion_circuit.check()
-                    result = self.notion.execute_step(step)
-                    self._notion_circuit.record_success()
-                except CircuitOpenError:
-                    result = {"ok": False, "error": "Notion is temporarily unavailable (circuit open). Try again later."}
-                except Exception as e:
-                    self._notion_circuit.record_failure()
-                    result = {"ok": False, "error": f"Notion error: {e}"}
+            elif service == "notion":
+                notion_brain = self._get_notion_brain_for_step()
+                if not notion_brain:
+                    result = {"ok": False, "error": "Notion is not connected. Say `connect notion` or set NOTION_TOKEN."}
+                else:
+                    try:
+                        self._notion_circuit.check()
+                        result = notion_brain.execute_step(step)
+                        self._notion_circuit.record_success()
+                    except CircuitOpenError:
+                        result = {"ok": False, "error": "Notion is temporarily unavailable (circuit open). Try again later."}
+                    except Exception as e:
+                        self._notion_circuit.record_failure()
+                        result = {"ok": False, "error": f"Notion error: {e}"}
             elif service == "slack":
                 result = self._execute_slack_step(step)
             elif service == "file_gen":
@@ -2023,6 +2035,24 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Google Calendar / Gmail execution
     # ------------------------------------------------------------------
+
+    def _get_notion_brain_for_step(self):
+        """Resolve the Notion brain for write step execution: per-user first, then global."""
+        user_id = current_user_id.get()
+        if user_id and self.notion_oauth.get_token(user_id):
+            try:
+                from .integrations.notion_second_brain import build_user_second_brain
+                brain = build_user_second_brain(
+                    user_id=user_id,
+                    notion_oauth=self.notion_oauth,
+                    user_registry=self.notion_user_registry,
+                    config=self.config,
+                )
+                if brain:
+                    return brain
+            except Exception as e:
+                logger.warning("Failed to build per-user Notion brain for %s: %s", user_id, e)
+        return self.notion
 
     def _execute_google_step(self, step: dict, service: str) -> dict:
         """Execute a Google Calendar or Gmail step using per-user credentials."""
@@ -2218,7 +2248,7 @@ class Orchestrator:
     # Connection management (per-user OAuth)
     # ------------------------------------------------------------------
 
-    _SUPPORTED_SERVICES = {"google"}
+    _SUPPORTED_SERVICES = {"google", "notion"}
 
     def _handle_connect(self, channel: str, thread_ts: str, user: str, service: str) -> None:
         """Start an OAuth flow for a service."""
@@ -2265,6 +2295,44 @@ class Orchestrator:
                 logger.error("Failed to DM user %s: %s", user, e)
                 self._post(channel, thread_ts, f"Couldn't send you a DM. Error: {e}")
 
+        elif service == "notion":
+            if not self.notion_oauth.is_configured:
+                self._post(channel, thread_ts, "Notion OAuth is not configured. Set `NOTION_OAUTH_CLIENT_ID` and `NOTION_OAUTH_CLIENT_SECRET` in `.env`.")
+                return
+
+            existing = self.credential_store.list_services(user)
+            if "notion" in existing:
+                self._post(channel, thread_ts, "You're already connected to Notion. Say `disconnect notion` first if you want to reconnect.")
+                return
+
+            auth_url = self.notion_oauth.generate_auth_url()
+            if not auth_url:
+                self._post(channel, thread_ts, "Failed to generate authorization URL.")
+                return
+
+            try:
+                dm = self.slack.conversations_open(users=user)
+                dm_channel = dm["channel"]["id"]
+                self.slack.chat_postMessage(
+                    channel=dm_channel,
+                    text=(
+                        "*Connect Notion*\n\n"
+                        "1. Click the link below to authorize Jibsa:\n"
+                        f"   {auth_url}\n\n"
+                        "2. Select the pages you want to share, then click *Allow access*.\n"
+                        "3. Your browser will redirect to a page that won't load — that's expected.\n"
+                        "4. Copy the `code` value from the URL bar. It looks like:\n"
+                        "   `http://localhost?code=`*`abc123...`*`&state=...`\n\n"
+                        "5. *Paste just the code value here* (in this DM).\n\n"
+                        "_This link expires in a few minutes._"
+                    ),
+                )
+                self._pending_oauth[user] = (service, dm_channel, thread_ts)
+                self._post(channel, thread_ts, "I've sent you a DM with the authorization link. Follow the steps there.")
+            except Exception as e:
+                logger.error("Failed to DM user %s: %s", user, e)
+                self._post(channel, thread_ts, f"Couldn't send you a DM. Error: {e}")
+
     def _handle_oauth_code(self, channel: str, thread_ts: str, user: str, text: str) -> None:
         """Handle an OAuth authorization code pasted in DM."""
         service, orig_dm_channel, orig_thread_ts = self._pending_oauth.pop(user)
@@ -2289,6 +2357,28 @@ class Orchestrator:
                 self.audit.log(action="service_connected", user_id=user, service="google")
             else:
                 self._post(channel, thread_ts, f"Authorization failed: {result['error']}\n\nSay `connect google` to try again.")
+
+        elif service == "notion":
+            result = self.notion_oauth.exchange_code(user, code)
+            if result["ok"]:
+                # Run database discovery for the user
+                workspace = result.get("workspace_name", "your workspace")
+                try:
+                    from .integrations.notion_second_brain import build_user_second_brain
+                    brain = build_user_second_brain(
+                        user_id=user,
+                        notion_oauth=self.notion_oauth,
+                        user_registry=self.notion_user_registry,
+                        config=self.config,
+                    )
+                    db_count = len(brain._registry.all_databases()) if brain else 0
+                    self._post(channel, thread_ts, f"Connected to Notion workspace *{workspace}*! Found {db_count} database(s). Your Notion data is now available to your interns.")
+                except Exception as e:
+                    logger.warning("Notion discovery failed for user=%s: %s", user, e)
+                    self._post(channel, thread_ts, f"Connected to Notion workspace *{workspace}*! Database discovery had an issue, but your connection is saved.")
+                self.audit.log(action="service_connected", user_id=user, service="notion")
+            else:
+                self._post(channel, thread_ts, f"Authorization failed: {result['error']}\n\nSay `connect notion` to try again.")
 
     def _handle_google_token(self, channel: str, thread_ts: str, user: str, raw: str) -> None:
         """Store Google credentials from a token JSON pasted by the user."""
@@ -2321,6 +2411,15 @@ class Orchestrator:
             if result["ok"]:
                 self._post(channel, thread_ts, "Disconnected from Google. Your credentials have been revoked and deleted.")
                 self.audit.log(action="service_disconnected", user_id=user, service="google")
+            else:
+                self._post(channel, thread_ts, f"Could not disconnect: {result['error']}")
+
+        elif service == "notion":
+            result = self.notion_oauth.revoke_and_delete(user)
+            if result["ok"]:
+                self.notion_user_registry.delete_registry(user)
+                self._post(channel, thread_ts, "Disconnected from Notion. Your credentials and database registry have been deleted.\n_To fully revoke access, remove Jibsa from your Notion integrations at notion.so/my-integrations._")
+                self.audit.log(action="service_disconnected", user_id=user, service="notion")
             else:
                 self._post(channel, thread_ts, f"Could not disconnect: {result['error']}")
 
@@ -2361,13 +2460,20 @@ class Orchestrator:
     def _handle_list_connections(self, channel: str, thread_ts: str, user: str) -> None:
         """List the user's connected services."""
         services = self.credential_store.list_services(user)
-        if not services:
-            self._post(channel, thread_ts, "You have no connected services. Say `connect google` to get started.")
+        # Filter out internal registry entries
+        display_services = [s for s in services if not s.endswith("_registry")]
+        if not display_services:
+            self._post(channel, thread_ts, "You have no connected services. Say `connect google` or `connect notion` to get started.")
             return
 
         lines = ["*Your Connected Services*\n"]
-        for svc in services:
-            lines.append(f"  - {svc}")
+        for svc in display_services:
+            extra = ""
+            if svc == "notion":
+                ws = self.notion_oauth.get_workspace_name(user)
+                if ws:
+                    extra = f" (workspace: {ws})"
+            lines.append(f"  - {svc}{extra}")
         lines.append("\n_Say `disconnect <service>` to remove a connection._")
         self._post(channel, thread_ts, "\n".join(lines))
 

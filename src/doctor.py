@@ -121,6 +121,8 @@ def check_env_vars() -> bool:
     # Optional keys
     optional = {
         "NOTION_TOKEN": "Notion integration token (ntn_...)",
+        "NOTION_OAUTH_CLIENT_ID": "Notion OAuth client ID (for per-user Notion)",
+        "NOTION_OAUTH_CLIENT_SECRET": "Notion OAuth client secret (for per-user Notion)",
         "GOOGLE_API_KEY": "Google API key (for image generation)",
         "ZENROWS_API_KEY": "ZenRows API key (for web reader tool)",
     }

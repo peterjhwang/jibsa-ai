@@ -139,11 +139,16 @@ class NotionSecondBrain:
         client: NotionClient,
         db_registry: DatabaseRegistry,
         parent_page_id: str = "",
+        user_registry: "Any | None" = None,
+        user_id: str = "",
     ):
         self._client = client
         self._registry = db_registry
         self._parent_page_id = parent_page_id
         self._schema_cache: dict[str, dict] = {}
+        # Per-user mode: if set, cache saves go to credential store
+        self._user_registry = user_registry
+        self._user_id = user_id
 
     # -----------------------------------------------------------------------
     # DB lookup helpers — delegate to registry
@@ -181,12 +186,19 @@ class NotionSecondBrain:
             new_id = db["id"]
             keywords = template.get("keywords", [])
             self._registry.register(name, new_id, keywords)
-            self._registry.save_cache(_CACHE_PATH)
+            self._save_registry_cache()
             logger.info("Auto-created database '%s' → %s", name, new_id)
             return new_id
         except NotionAPIError as e:
             logger.error("Failed to auto-create database '%s': %s", name, e)
             return ""
+
+    def _save_registry_cache(self) -> None:
+        """Save registry to per-user credential store or file cache."""
+        if self._user_registry and self._user_id:
+            self._user_registry.save_registry(self._user_id, self._registry)
+        else:
+            self._registry.save_cache(_CACHE_PATH)
 
     # -----------------------------------------------------------------------
     # Schema auto-discovery helpers (for writes)
@@ -461,7 +473,7 @@ class NotionSecondBrain:
             )
             keywords = params.get("keywords", [])
             self._registry.register(name, db["id"], keywords)
-            self._registry.save_cache(_CACHE_PATH)
+            self._save_registry_cache()
             return {"ok": True, "database_id": db["id"], "url": db.get("url", "")}
         except NotionAPIError as e:
             return {"ok": False, "error": str(e)}
@@ -632,3 +644,63 @@ def build_second_brain(config: dict) -> "NotionSecondBrain | None":
     db_count = len(registry.all_databases())
     logger.info("Notion connected (%d DBs: yaml+discovered+cached)", db_count)
     return NotionSecondBrain(client=client, db_registry=registry, parent_page_id=parent_page_id)
+
+
+def _discover_databases_via_search(client: NotionClient) -> list[dict]:
+    """Discover databases accessible to a user's integration via Notion search API."""
+    try:
+        results = client.search_pages(
+            query="",
+            filter={"property": "object", "value": "database"},
+            page_size=50,
+        )
+        databases = []
+        for db in results:
+            title_parts = db.get("title", [])
+            name = "".join(t.get("plain_text", "") for t in title_parts if isinstance(t, dict))
+            if name and db.get("id"):
+                databases.append({"name": name, "id": db["id"]})
+        return databases
+    except Exception as e:
+        logger.warning("Could not discover databases via search: %s", e)
+        return []
+
+
+def build_user_second_brain(
+    user_id: str,
+    notion_oauth,
+    user_registry,
+    config: dict,
+) -> "NotionSecondBrain | None":
+    """Build a per-user NotionSecondBrain using the user's OAuth token.
+
+    Returns None if the user has no Notion token.
+    """
+    token = notion_oauth.get_token(user_id)
+    if not token:
+        return None
+
+    client = NotionClient(token)
+
+    # Try to load existing registry
+    registry = user_registry.get_registry(user_id)
+    if registry is None:
+        # First time — discover databases
+        registry = DatabaseRegistry()
+        discovered = _discover_databases_via_search(client)
+        for db in discovered:
+            template = DB_TEMPLATES.get(db["name"], {})
+            keywords = template.get("keywords", [])
+            registry.register(db["name"], db["id"], keywords)
+            logger.info("User %s Notion DB %-25s → %s (discovered)", user_id, db["name"], db["id"])
+        user_registry.save_registry(user_id, registry)
+
+    db_count = len(registry.all_databases())
+    logger.info("Per-user Notion for %s (%d DBs)", user_id, db_count)
+    return NotionSecondBrain(
+        client=client,
+        db_registry=registry,
+        parent_page_id="",  # per-user mode doesn't use a global parent page
+        user_registry=user_registry,
+        user_id=user_id,
+    )

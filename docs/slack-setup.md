@@ -55,7 +55,7 @@ Socket Mode lets Jibsa connect without a public URL.
 1. In the left sidebar, go to **Event Subscriptions**
 2. Toggle **Enable Events** ON
 3. Under **Subscribe to bot events**, click **Add Bot User Event**
-4. Add: `message.channels`, `message.im`
+4. Add: `message.channels`, `message.im`, `app_mention`
 5. Click **Save Changes**
 
 ---

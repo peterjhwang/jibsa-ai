@@ -273,8 +273,6 @@ class Orchestrator:
         self._edit_sessions: dict[str, tuple[str, float]] = {}
         self._edit_session_ttl: float = 3600.0  # 1 hour TTL
 
-        # Pending OAuth flows: user_id → service name
-        self._pending_oauth: dict[str, str] = {}
 
         # Register scheduled jobs
         self._register_activity_summary()
@@ -638,10 +636,6 @@ class Orchestrator:
         # Periodic cleanup of expired edit sessions
         self._cleanup_edit_sessions()
 
-        # Priority 0.3: Pending OAuth code (user pasting auth code in DM)
-        if user in self._pending_oauth and channel.startswith("D"):
-            self._handle_oauth_code(channel, thread_ts, user, text)
-            return
 
         # Priority 0.5: Active edit session
         if thread_ts in self._edit_sessions:
@@ -699,6 +693,9 @@ class Orchestrator:
         if cmd.startswith("disconnect ") and not route.intern_name:
             service = cmd[11:].strip()
             self._handle_disconnect(channel, thread_ts, user, service)
+            return
+        if cmd.startswith("google token ") and not route.intern_name:
+            self._handle_google_token(channel, thread_ts, user, cmd[13:].strip())
             return
 
         # SOP commands
@@ -2234,32 +2231,38 @@ class Orchestrator:
                 self._post(channel, thread_ts, "You're already connected to Google. Say `disconnect google` first if you want to reconnect.")
                 return
 
-            auth_url = self.google_oauth.generate_auth_url()
-            if not auth_url:
-                self._post(channel, thread_ts, "Failed to generate authorization URL.")
-                return
+            self._post(
+                channel,
+                thread_ts,
+                (
+                    "*Connect Google Workspace*\n\n"
+                    "Run this on your local machine (the one with a browser):\n"
+                    "```python3 scripts/google_auth.py```\n"
+                    "It will open Google's consent page. After you approve, "
+                    "copy the output and paste it here as:\n"
+                    "`@Jibsa google token <paste JSON here>`"
+                ),
+            )
 
-            # DM the user with the auth URL
-            try:
-                dm = self.slack.conversations_open(users=user)
-                dm_channel = dm["channel"]["id"]
-                self.slack.chat_postMessage(
-                    channel=dm_channel,
-                    text=(
-                        "*Connect Google Workspace*\n\n"
-                        "This connects Calendar, Gmail, and Drive in one step.\n\n"
-                        "1. Click the link below to authorize Jibsa:\n"
-                        f"   {auth_url}\n\n"
-                        "2. After authorizing, Google will show you a code.\n"
-                        "3. *Paste that code here* (in this DM).\n\n"
-                        "_This link expires in a few minutes._"
-                    ),
-                )
-                self._pending_oauth[user] = service
-                self._post(channel, thread_ts, "I've sent you a DM with the authorization link. Follow the steps there.")
-            except Exception as e:
-                logger.error("Failed to DM user %s: %s", user, e)
-                self._post(channel, thread_ts, f"Couldn't send you a DM. Error: {e}")
+    def _handle_google_token(self, channel: str, thread_ts: str, user: str, raw: str) -> None:
+        """Store Google credentials from a token JSON pasted by the user."""
+        import json as _json
+        import re as _re
+        # Strip Slack mention/formatting
+        text = _re.sub(r"^<@[A-Z0-9]+>\s*", "", raw.strip())
+        try:
+            token_data = _json.loads(text)
+        except _json.JSONDecodeError:
+            self._post(channel, thread_ts, "Couldn't parse that — make sure you pasted the full JSON output from `scripts/google_auth.py`.")
+            return
+        required = {"access_token", "refresh_token", "client_id", "client_secret"}
+        missing = required - set(token_data.keys())
+        if missing:
+            self._post(channel, thread_ts, f"Token JSON is missing fields: {', '.join(missing)}")
+            return
+        self.credential_store.set(user, "google", token_data)
+        self.audit.log(action="service_connected", user_id=user, service="google")
+        self._post(channel, thread_ts, "Connected to Google Workspace! Calendar, Gmail, and Drive are now available to your interns.")
 
     def _handle_disconnect(self, channel: str, thread_ts: str, user: str, service: str) -> None:
         """Revoke and delete stored credentials for a service."""
@@ -2322,24 +2325,6 @@ class Orchestrator:
         lines.append("\n_Say `disconnect <service>` to remove a connection._")
         self._post(channel, thread_ts, "\n".join(lines))
 
-    def _handle_oauth_code(self, channel: str, thread_ts: str, user: str, text: str) -> None:
-        """Handle a pasted OAuth authorization code in DM."""
-        service = self._pending_oauth.pop(user, None)
-        if not service:
-            return
-
-        code = text.strip()
-        if not code or len(code) < 10:
-            self._post(channel, thread_ts, "That doesn't look like a valid authorization code. Please try `connect google` again.")
-            return
-
-        if service == "google":
-            result = self.google_oauth.exchange_code(user, code)
-            if result["ok"]:
-                self._post(channel, thread_ts, "Connected to Google Workspace! Calendar, Gmail, and Drive are now available to your interns.")
-                self.audit.log(action="service_connected", user_id=user, service="google")
-            else:
-                self._post(channel, thread_ts, f"Authorization failed: {result['error']}\n\nSay `connect google` to try again.")
 
     # ------------------------------------------------------------------
     # Helpers

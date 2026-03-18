@@ -14,3 +14,5 @@ data/
 node_modules/
 .DS_Store
 config/notion_databases_cache.json
+jibsa.log
+jibsa.pid

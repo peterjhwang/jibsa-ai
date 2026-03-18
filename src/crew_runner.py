@@ -12,7 +12,7 @@ Supports multiple LLM providers via CrewAI's native integration:
 import json
 import logging
 import re
-import signal
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -506,17 +506,29 @@ class CrewRunner:
         return output
 
     def _run_with_timeout(self, crew: Crew):
-        """Run crew.kickoff() with a SIGALRM timeout (Unix only)."""
-        def _timeout_handler(signum, frame):
-            raise TimeoutError(f"Crew execution exceeded {self._crew_timeout}s")
+        """Run crew.kickoff() with a thread-safe timeout.
 
-        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(self._crew_timeout)
-        try:
-            return crew.kickoff()
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+        Uses threading.Timer instead of SIGALRM so it works in worker threads
+        (Slack Bolt dispatches message handlers off the main thread).
+        """
+        result_box: list = []
+        exc_box: list = []
+
+        def _target():
+            try:
+                result_box.append(crew.kickoff())
+            except Exception as e:  # noqa: BLE001
+                exc_box.append(e)
+
+        t = threading.Thread(target=_target, daemon=True)
+        t.start()
+        t.join(timeout=self._crew_timeout)
+
+        if t.is_alive():
+            raise TimeoutError(f"Crew execution exceeded {self._crew_timeout}s")
+        if exc_box:
+            raise exc_box[0]
+        return result_box[0]
 
     @staticmethod
     def _format_history(history: list[dict] | None) -> str:

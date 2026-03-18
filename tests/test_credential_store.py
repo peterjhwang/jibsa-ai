@@ -105,52 +105,12 @@ class TestGoogleOAuth:
         with patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": ""}, clear=False):
             mgr = GoogleOAuthManager(store)
             assert mgr.is_configured is False
-            assert mgr.generate_auth_url() is None
 
     def test_configured(self, store):
         from src.integrations.google_oauth import GoogleOAuthManager
         with patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "test-id", "GOOGLE_CLIENT_SECRET": "test-secret"}):
             mgr = GoogleOAuthManager(store)
             assert mgr.is_configured is True
-
-    def test_generate_auth_url(self, store):
-        from src.integrations.google_oauth import GoogleOAuthManager
-        with patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "test-id", "GOOGLE_CLIENT_SECRET": "test-secret"}):
-            mgr = GoogleOAuthManager(store)
-            url = mgr.generate_auth_url()
-            assert url is not None
-            assert "accounts.google.com" in url
-            assert "test-id" in url
-
-    def test_exchange_code_not_configured(self, store):
-        from src.integrations.google_oauth import GoogleOAuthManager
-        with patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": ""}):
-            mgr = GoogleOAuthManager(store)
-            result = mgr.exchange_code("U001", "fake-code")
-            assert result["ok"] is False
-            assert "not configured" in result["error"]
-
-    @patch("src.integrations.google_oauth.Flow")
-    def test_exchange_code_success(self, MockFlow, store):
-        from src.integrations.google_oauth import GoogleOAuthManager
-        mock_flow = MockFlow.from_client_config.return_value
-        mock_creds = mock_flow.credentials
-        mock_creds.token = "access-token"
-        mock_creds.refresh_token = "refresh-token"
-        mock_creds.token_uri = "https://oauth2.googleapis.com/token"
-        mock_creds.client_id = "test-id"
-        mock_creds.client_secret = "test-secret"
-        mock_creds.scopes = ["calendar.readonly"]
-        mock_creds.expiry = None
-
-        with patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "test-id", "GOOGLE_CLIENT_SECRET": "test-secret"}):
-            mgr = GoogleOAuthManager(store)
-            result = mgr.exchange_code("U001", "valid-code")
-            assert result["ok"] is True
-            # Verify tokens were stored
-            data = store.get("U001", "google")
-            assert data is not None
-            assert data["access_token"] == "access-token"
 
     def test_revoke_no_credentials(self, store):
         from src.integrations.google_oauth import GoogleOAuthManager
@@ -159,7 +119,7 @@ class TestGoogleOAuth:
             result = mgr.revoke_and_delete("U999")
             assert result["ok"] is False
 
-    @patch("requests.post")
+    @patch("src.integrations.google_oauth._requests.post")
     def test_revoke_and_delete(self, mock_post, store):
         from src.integrations.google_oauth import GoogleOAuthManager
         mock_post.return_value.status_code = 200
@@ -213,8 +173,6 @@ class TestOrchestratorConnections:
 
     def test_connect_google_not_configured(self, orch):
         with patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": ""}):
-            orch.google_oauth._client_id = ""
-            orch.google_oauth._client_secret = ""
             orch.handle_message("C123", "ts-3", "U001", "connect google")
             text = orch.slack.chat_postMessage.call_args.kwargs["text"]
             assert "not configured" in text.lower()

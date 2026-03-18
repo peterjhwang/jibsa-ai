@@ -15,17 +15,33 @@ import re
 import signal
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
+load_dotenv(override=True)
+
+
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .config_schema import validate_config
 from .orchestrator import Orchestrator
 
-load_dotenv()
+
+
+# LiteLLM (used by CrewAI) calls signal.signal() internally for timeout handling,
+# which raises an error in non-main threads (Slack Bolt worker threads).
+# Patch signal.signal to silently ignore calls from worker threads — they can't
+# receive signals anyway, so this is safe.
+_original_signal = signal.signal
+
+def _thread_safe_signal(signum, handler):
+    if threading.current_thread() is threading.main_thread():
+        return _original_signal(signum, handler)
+
+signal.signal = _thread_safe_signal
 
 logging.basicConfig(
     level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),

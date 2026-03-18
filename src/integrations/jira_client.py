@@ -227,11 +227,15 @@ class JiraClient:
     # -------------------------------------------------------------------
 
     def _handle_create_issue(self, params: dict) -> dict:
-        project_key = params["project_key"]
-        summary = params["summary"]
-        issue_type = params.get("issue_type", "Task")
+        project_key = params.get("project_key") or params.get("project", "")
+        if not project_key:
+            return {"ok": False, "error": "Missing project_key in params"}
+        summary = params.get("summary", "")
+        if not summary:
+            return {"ok": False, "error": "Missing summary in params"}
+        issue_type = params.get("issue_type", params.get("type", "Task"))
         description = params.get("description", "")
-        extra = {k: v for k, v in params.items() if k not in ("project_key", "summary", "issue_type", "description")}
+        extra = {k: v for k, v in params.items() if k not in ("project_key", "project", "summary", "issue_type", "type", "description")}
         issue = self.create_issue(project_key, summary, issue_type, description, **extra)
         key = issue.get("key", "")
         url = f"{self._server}/browse/{key}" if key else ""

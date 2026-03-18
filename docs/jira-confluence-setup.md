@@ -23,6 +23,22 @@ JIRA_API_TOKEN=your-api-token-here
 
 The same credentials work for both Jira and Confluence (Atlassian Cloud uses a single API token for all products).
 
+Optionally, set a default Confluence space so interns don't need to specify one every time:
+
+```
+CONFLUENCE_DEFAULT_SPACE=TEAMSPACE
+```
+
+**To find your space key:**
+1. Open Confluence and go to the space you want
+2. Look at the URL — it contains the space key:
+   ```
+   https://your-org.atlassian.net/wiki/spaces/ENG/overview
+                                              ^^^
+                                          this is the space key
+   ```
+3. Alternatively, click **Space settings** (bottom of the left sidebar) — the space key is shown at the top
+
 ---
 
 ## 3. Enable in `config/settings.yaml`

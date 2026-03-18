@@ -49,6 +49,7 @@ from .tools.delegate_tool import DelegateToInternTool
 from .scheduler import ReminderScheduler
 from .integrations.credential_store import CredentialStore
 from .integrations.sop_store import SOPStore
+from .integrations.schedule_store import ScheduleStore
 from .integrations.google_oauth import GoogleOAuthManager
 from .integrations.notion_oauth import NotionOAuthManager
 from .integrations.notion_user_registry import NotionUserRegistry
@@ -63,6 +64,7 @@ _CONFIG_DIR = Path(__file__).parent.parent / "config"
 MANAGEMENT_COMMANDS = {
     "list interns", "team", "interns", "show team", "stats", "reminders",
     "history", "help", "audit", "templates", "my connections", "connections",
+    "my schedules", "schedules",
 }
 
 
@@ -118,6 +120,106 @@ def _parse_reminder_time(when: str, timezone: str = "UTC"):
         return tomorrow.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Schedule spec parser — "8:30am weekdays" → ("30 8 * * 1-5", "8:30 AM weekdays")
+# ---------------------------------------------------------------------------
+
+_DAY_MAP = {
+    "monday": "0", "mon": "0",
+    "tuesday": "1", "tue": "1",
+    "wednesday": "2", "wed": "2",
+    "thursday": "3", "thu": "3",
+    "friday": "4", "fri": "4",
+    "saturday": "5", "sat": "5",
+    "sunday": "6", "sun": "6",
+}
+
+
+def _parse_time_part(text: str) -> tuple[int, int] | None:
+    """Parse '8:30am', '5pm', '17:00' etc. → (hour, minute)."""
+    import re
+    m = re.match(r"(\d{1,2}):?(\d{2})?\s*(am|pm)?", text.strip(), re.IGNORECASE)
+    if not m:
+        return None
+    hour = int(m.group(1))
+    minute = int(m.group(2) or 0)
+    ampm = (m.group(3) or "").lower()
+    if ampm == "pm" and hour < 12:
+        hour += 12
+    elif ampm == "am" and hour == 12:
+        hour = 0
+    if hour > 23 or minute > 59:
+        return None
+    return (hour, minute)
+
+
+def _parse_schedule_spec(text: str) -> tuple[str, str] | None:
+    """Parse a natural-language schedule spec into (cron_string, description).
+
+    Examples:
+      "8:30am weekdays"       → ("30 8 * * 1-5", "8:30 AM weekdays")
+      "5pm weekdays"          → ("0 17 * * 1-5", "5:00 PM weekdays")
+      "friday 4pm"            → ("0 16 * * 5", "4:00 PM Fridays")
+      "every day 9am"         → ("0 9 * * *", "9:00 AM daily")
+      "every monday 9am"      → ("0 9 * * 1", "9:00 AM Mondays")
+      "every weekday 8:30am"  → ("30 8 * * 1-5", "8:30 AM weekdays")
+    """
+    import re
+    clean = text.strip().lower()
+    clean = re.sub(r"^every\s+", "", clean)
+
+    # Try to extract time from anywhere in the string
+    time_match = re.search(r"(\d{1,2}):?(\d{2})?\s*(am|pm)?", clean, re.IGNORECASE)
+    if not time_match:
+        return None
+
+    time_str = time_match.group(0)
+    parsed = _parse_time_part(time_str)
+    if not parsed:
+        return None
+    hour, minute = parsed
+
+    # Remove the time part to get the day spec
+    remainder = clean.replace(time_str, "").strip().strip(",").strip()
+
+    # Determine day_of_week
+    if remainder in ("weekdays", "weekday", "mon-fri"):
+        dow = "1-5"
+        desc_days = "weekdays"
+    elif remainder in ("daily", "day", ""):
+        dow = "*"
+        desc_days = "daily"
+    elif remainder in ("weekend", "weekends"):
+        dow = "6,0"
+        desc_days = "weekends"
+    elif remainder in _DAY_MAP:
+        dow = _DAY_MAP[remainder]
+        desc_days = f"{remainder.capitalize()}s"
+    else:
+        # Try multi-day: "monday, wednesday, friday"
+        parts = re.split(r"[,\s]+(?:and\s+)?", remainder)
+        day_nums = []
+        for p in parts:
+            p = p.strip()
+            if p in _DAY_MAP:
+                day_nums.append(_DAY_MAP[p])
+        if day_nums:
+            dow = ",".join(day_nums)
+            desc_days = ", ".join(p.strip().capitalize() for p in parts if p.strip() in _DAY_MAP)
+        else:
+            return None
+
+    cron = f"{minute} {hour} * * {dow}"
+
+    # Format description
+    h12 = hour % 12 or 12
+    ampm = "AM" if hour < 12 else "PM"
+    min_str = f":{minute:02d}" if minute else ":00"
+    description = f"{h12}{min_str} {ampm} {desc_days}"
+
+    return (cron, description)
 
 
 _PROVIDER_KEY_MAP = {
@@ -221,6 +323,9 @@ class Orchestrator:
         self.sop_store = SOPStore(db_path=intern_db_path)
         self.sop_registry = SOPRegistry(self.sop_store)
 
+        # User schedule store (SQLite-backed, same DB)
+        self.schedule_store = ScheduleStore(db_path=intern_db_path)
+
         # Seed SOPs from YAML if present
         sop_yaml = _CONFIG_DIR / "sops.yaml"
         if sop_yaml.exists():
@@ -272,10 +377,11 @@ class Orchestrator:
         # Pending Notion post-connect setup: user_id → dm_channel
         self._pending_notion_setup: dict[str, str] = {}
 
-        # Register scheduled jobs
+        # Register scheduled jobs (config-based + user-defined)
         self._register_activity_summary()
         self._register_morning_briefing()
         self._register_eod_review()
+        self._register_user_schedules()
 
     def _register_crewai_tools(self) -> None:
         """Create and register CrewAI tool instances."""
@@ -697,8 +803,21 @@ class Orchestrator:
                 self._handle_templates(channel, thread_ts)
             elif cmd in ("my connections", "connections"):
                 self._handle_list_connections(channel, thread_ts, user)
+            elif cmd in ("my schedules", "schedules"):
+                self._handle_list_schedules(channel, thread_ts, user)
             else:
                 self._handle_list_interns(channel, thread_ts)
+            return
+
+        # Schedule commands
+        if cmd.startswith("schedule ") and not route.intern_name:
+            self._handle_schedule(channel, thread_ts, user, route.message[9:].strip())
+            return
+        if cmd.startswith("remove schedule ") and not route.intern_name:
+            self._handle_remove_schedule(channel, thread_ts, user, route.message[16:].strip())
+            return
+        if cmd.startswith("delete schedule ") and not route.intern_name:
+            self._handle_remove_schedule(channel, thread_ts, user, route.message[16:].strip())
             return
 
         # Connect/disconnect service
@@ -943,6 +1062,179 @@ class Orchestrator:
         for r in reminders:
             lines.append(f"  \u23f0 {r['message'][:60]} \u2014 {r['run_at']}")
         self._post(channel, thread_ts, "\n".join(lines))
+
+    # ------------------------------------------------------------------
+    # User schedules
+    # ------------------------------------------------------------------
+
+    _BUILTIN_JOBS = {
+        "morning briefing": ("morning_briefing", "_post_morning_briefing"),
+        "eod review": ("eod_review", "_post_eod_review"),
+        "weekly digest": ("weekly_digest", "_post_activity_summary"),
+    }
+
+    def _handle_schedule(self, channel: str, thread_ts: str, user: str, text: str) -> None:
+        """Create a user schedule from natural language."""
+        lower = text.lower().strip()
+
+        # Check for builtin job: "morning briefing 8:30am weekdays"
+        for label, (job_name, handler_name) in self._BUILTIN_JOBS.items():
+            if lower.startswith(label):
+                time_spec = text[len(label):].strip()
+                parsed = _parse_schedule_spec(time_spec)
+                if not parsed:
+                    self._post(channel, thread_ts, f"Couldn't parse the time. Try: `schedule {label} 8:30am weekdays`")
+                    return
+
+                cron, description = parsed
+                # Remove existing schedule with same name for this user
+                existing_id = self.schedule_store.remove_by_user_and_name(user, job_name)
+                if existing_id:
+                    self.reminder_scheduler.remove_cron_job(f"user_schedule_{existing_id}")
+
+                sched = self.schedule_store.add(
+                    user_id=user, name=job_name, schedule_type="builtin",
+                    cron=cron, channel=channel,
+                )
+                handler = getattr(self, handler_name)
+                self.reminder_scheduler.add_cron_job(
+                    f"user_schedule_{sched['id']}", handler, cron,
+                )
+                self.audit.log(action="schedule_created", user_id=user, details={"name": job_name, "cron": cron})
+                self._post(channel, thread_ts, f"Scheduled *{label}* at {description}.")
+                return
+
+        # Custom recurring: "every monday 9am: check sprint board"
+        import re
+        # Split on colon to separate schedule spec from message
+        match = re.match(r"(.+?):\s*(.+)", text, re.DOTALL)
+        if match:
+            spec_part = match.group(1).strip()
+            message = match.group(2).strip()
+        else:
+            self._post(
+                channel, thread_ts,
+                "For custom schedules, use: `schedule every monday 9am: your message here`\n"
+                "For built-in jobs: `schedule morning briefing 8:30am weekdays`"
+            )
+            return
+
+        parsed = _parse_schedule_spec(spec_part)
+        if not parsed:
+            self._post(channel, thread_ts, f"Couldn't parse the schedule. Try: `schedule every monday 9am: your message`")
+            return
+
+        cron, description = parsed
+        # Use first few words of message as the name
+        name = re.sub(r"[^a-z0-9 ]", "", message.lower())[:40].strip().replace(" ", "_") or "custom"
+
+        sched = self.schedule_store.add(
+            user_id=user, name=name, schedule_type="custom",
+            cron=cron, channel=channel, message=message,
+        )
+        self.reminder_scheduler.add_cron_job(
+            f"user_schedule_{sched['id']}",
+            self.reminder_scheduler.fire_custom_schedule,
+            cron,
+            channel=channel,
+            message=message,
+        )
+        self.audit.log(action="schedule_created", user_id=user, details={"name": name, "cron": cron, "message": message})
+        self._post(channel, thread_ts, f"Scheduled *{message}* at {description}.")
+
+    def _handle_remove_schedule(self, channel: str, thread_ts: str, user: str, text: str) -> None:
+        """Remove a user schedule by name or number."""
+        schedules = self.schedule_store.list_for_user(user)
+        if not schedules:
+            self._post(channel, thread_ts, "You have no schedules.")
+            return
+
+        target = text.strip()
+
+        # Try by number (1-indexed from "my schedules" list)
+        try:
+            idx = int(target) - 1
+            if 0 <= idx < len(schedules):
+                sched = schedules[idx]
+                self.schedule_store.remove(sched["id"])
+                self.reminder_scheduler.remove_cron_job(f"user_schedule_{sched['id']}")
+                display_name = sched["name"].replace("_", " ")
+                self.audit.log(action="schedule_removed", user_id=user, details={"name": sched["name"]})
+                self._post(channel, thread_ts, f"Removed schedule *{display_name}*.")
+                return
+        except ValueError:
+            pass
+
+        # Try by name (exact or fuzzy match)
+        target_lower = target.lower().replace(" ", "_")
+        for sched in schedules:
+            if sched["name"] == target_lower or sched["name"].replace("_", " ") == target.lower():
+                self.schedule_store.remove(sched["id"])
+                self.reminder_scheduler.remove_cron_job(f"user_schedule_{sched['id']}")
+                display_name = sched["name"].replace("_", " ")
+                self.audit.log(action="schedule_removed", user_id=user, details={"name": sched["name"]})
+                self._post(channel, thread_ts, f"Removed schedule *{display_name}*.")
+                return
+
+        self._post(channel, thread_ts, f"No schedule matching '{target}'. Say `my schedules` to see your list.")
+
+    def _handle_list_schedules(self, channel: str, thread_ts: str, user: str) -> None:
+        """List the user's schedules."""
+        schedules = self.schedule_store.list_for_user(user)
+        if not schedules:
+            self._post(
+                channel, thread_ts,
+                "You have no schedules.\n\n"
+                "Set one up:\n"
+                "  `schedule morning briefing 8:30am weekdays`\n"
+                "  `schedule every monday 9am: check sprint board`"
+            )
+            return
+
+        lines = ["*Your Schedules*\n"]
+        for i, s in enumerate(schedules, 1):
+            name = s["name"].replace("_", " ")
+            cron = s["cron"]
+            stype = s["schedule_type"]
+            msg = f" — _{s['message'][:50]}_" if s.get("message") else ""
+            lines.append(f"  {i}. *{name}* (`{cron}`){msg}")
+        lines.append("\n_Say `remove schedule <name or number>` to delete._")
+        self._post(channel, thread_ts, "\n".join(lines))
+
+    def _register_user_schedules(self) -> None:
+        """On startup, re-register all user schedules with APScheduler."""
+        schedules = self.schedule_store.list_all_enabled()
+        if not schedules:
+            return
+
+        count = 0
+        for sched in schedules:
+            job_id = f"user_schedule_{sched['id']}"
+            try:
+                if sched["schedule_type"] == "builtin":
+                    handler_map = {
+                        "morning_briefing": self._post_morning_briefing,
+                        "eod_review": self._post_eod_review,
+                        "weekly_digest": self._post_activity_summary,
+                    }
+                    handler = handler_map.get(sched["name"])
+                    if handler:
+                        self.reminder_scheduler.add_cron_job(job_id, handler, sched["cron"])
+                        count += 1
+                elif sched["schedule_type"] == "custom":
+                    self.reminder_scheduler.add_cron_job(
+                        job_id,
+                        self.reminder_scheduler.fire_custom_schedule,
+                        sched["cron"],
+                        channel=sched["channel"],
+                        message=sched["message"],
+                    )
+                    count += 1
+            except Exception as e:
+                logger.warning("Failed to re-register schedule %s: %s", sched["id"], e)
+
+        if count:
+            logger.info("Re-registered %d user schedule(s) from DB", count)
 
     # ------------------------------------------------------------------
     # Help command

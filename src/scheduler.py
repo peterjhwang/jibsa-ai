@@ -178,6 +178,54 @@ class ReminderScheduler:
                 )
                 self._meta_conn.commit()
 
+    # ------------------------------------------------------------------
+    # Cron jobs (for user-configurable schedules)
+    # ------------------------------------------------------------------
+
+    def add_cron_job(
+        self,
+        job_id: str,
+        handler,
+        cron_str: str,
+        **kwargs,
+    ) -> None:
+        """Register a cron job with APScheduler."""
+        from apscheduler.triggers.cron import CronTrigger
+
+        parts = cron_str.split()
+        if len(parts) < 5:
+            raise ValueError(f"Invalid cron string: {cron_str}")
+
+        trigger = CronTrigger(
+            minute=parts[0], hour=parts[1], day=parts[2],
+            month=parts[3], day_of_week=parts[4], timezone=self._timezone,
+        )
+        self._scheduler.add_job(
+            handler, trigger=trigger, id=job_id,
+            replace_existing=True, kwargs=kwargs,
+        )
+        logger.info("Cron job registered: id=%s cron=%s", job_id, cron_str)
+
+    def remove_cron_job(self, job_id: str) -> bool:
+        """Remove a cron job. Returns True if removed."""
+        try:
+            self._scheduler.remove_job(job_id)
+            logger.info("Cron job removed: id=%s", job_id)
+            return True
+        except Exception:
+            return False
+
+    def fire_custom_schedule(self, channel: str, message: str) -> None:
+        """Called by APScheduler when a custom recurring schedule fires."""
+        try:
+            self._slack.chat_postMessage(
+                channel=channel,
+                text=f"\U0001f4cb *Scheduled:* {message}",
+            )
+            logger.info("Custom schedule fired: channel=%s msg=%.60s", channel, message)
+        except Exception as e:
+            logger.error("Failed to post custom schedule: %s", e)
+
     def _cleanup_stale_metadata(self) -> None:
         """Remove metadata for jobs that no longer exist in APScheduler."""
         existing_ids = {job.id for job in self._scheduler.get_jobs()}

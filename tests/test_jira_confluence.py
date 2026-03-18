@@ -22,7 +22,7 @@ class TestJiraClient:
             return client
 
     def test_search_issues(self, client):
-        client._mock.jql.return_value = {
+        client._mock.get.return_value = {
             "issues": [{"key": "PROJ-1", "fields": {"summary": "Bug fix"}}]
         }
         results = client.search_issues("project = PROJ")

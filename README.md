@@ -53,6 +53,7 @@ You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
 
 | Command | What it does |
 |---------|-------------|
+| **Interns** | |
 | `@jibsa templates` | Browse pre-built intern templates |
 | `@jibsa hire from template content` | Instantly hire a pre-built intern |
 | `@jibsa hire a marketing intern` | Start conversational hiring flow |
@@ -63,19 +64,23 @@ You:  "@jibsa alex write 3 LinkedIn posts about our product launch"
 | `@jibsa show alex's jd` | View an intern's Job Description (rich Block Kit) |
 | `@jibsa edit alex's jd` | Interactive JD editing session |
 | `@jibsa fire alex` | Deactivate an intern |
-| `@jibsa help` | Contextual help with all commands |
-| `@jibsa help alex` | Intern-specific help (role, tools, usage) |
-| `@jibsa stats` | Usage metrics dashboard with recent actions |
-| `@jibsa history` | Approval history (approved/rejected plans) |
-| `@jibsa reminders` | List pending scheduled reminders |
+| **SOPs** | |
 | `@jibsa add sop` | Create a shared SOP (conversational flow) |
 | `@jibsa add sop for alex` | Create an intern-specific SOP |
 | `@jibsa show sops` | List all SOPs |
 | `@jibsa show sop weekly-report` | View a specific SOP's details |
 | `@jibsa remove sop weekly-report` | Delete a SOP |
+| **Google OAuth** | |
 | `@jibsa connect google` | Start per-user Google OAuth flow (DM-based) |
+| `@jibsa google token <JSON>` | Store tokens from `scripts/google_auth.py` (admin) |
 | `@jibsa disconnect google` | Revoke and delete stored Google tokens |
 | `@jibsa my connections` | List your connected services |
+| **General** | |
+| `@jibsa help` | Contextual help with all commands |
+| `@jibsa help alex` | Intern-specific help (role, tools, usage) |
+| `@jibsa stats` | Usage metrics dashboard with recent actions |
+| `@jibsa history` | Approval history (approved/rejected plans) |
+| `@jibsa reminders` | List pending scheduled reminders |
 | `@jibsa audit` | View recent audit log entries |
 
 ### Approval
@@ -124,6 +129,50 @@ Jibsa ships with **9 pre-built SOPs** in `config/sops.yaml` — or create your o
 ```
 
 When no SOP matches, the intern handles the request freeform (existing behaviour preserved).
+
+### Scheduling
+
+Jibsa supports two types of scheduling:
+
+**1. Reminders (on-demand, via interns)**
+
+Ask any intern with the `reminder` tool to set a one-off reminder:
+
+```
+@jibsa alex remind me to review the PR in 2 hours
+@jibsa alex set a reminder for tomorrow at 9am to send the report
+```
+
+The intern proposes the reminder → you approve → Jibsa posts the message at the scheduled time.
+
+```
+@jibsa reminders          → list all pending reminders
+```
+
+**2. Scheduled Jobs (recurring, via `settings.yaml`)**
+
+Configure recurring automated jobs in `config/settings.yaml`:
+
+```yaml
+scheduler:
+  morning_briefing:
+    enabled: true           # Daily digest: calendar, overdue tasks, Jira issues
+    cron: "0 8 * * 1-5"    # Mon-Fri 8 AM
+
+  eod_review:
+    enabled: true           # End-of-day: today's actions, tomorrow's schedule
+    cron: "0 17 * * 1-5"   # Mon-Fri 5 PM
+
+  overdue_alerts:
+    enabled: false          # Overdue task alerts (requires Notion)
+    cron: "0 10 * * 1-5"   # Mon-Fri 10 AM
+
+  weekly_digest:
+    enabled: false          # Weekly activity summary
+    cron: "0 16 * * 5"     # Friday 4 PM
+```
+
+Cron format: `minute hour day month day_of_week` (standard 5-field cron). Times use the timezone set in `jibsa.timezone`.
 
 ---
 
@@ -465,7 +514,7 @@ jibsa-ai/
 │       ├── intern_store.py         # SQLite backend for intern JD storage
 │       ├── sop_store.py           # SQLite backend for SOP storage
 │       ├── credential_store.py    # Fernet-encrypted SQLite per-user credential store
-│       ├── google_oauth.py        # Google OAuth2 OOB flow (per-user tokens)
+│       ├── google_oauth.py        # Google OAuth2 Desktop app flow (per-user tokens)
 │       ├── google_calendar_client.py  # Google Calendar API v3 wrapper
 │       ├── gmail_client.py        # Gmail API v1 wrapper
 │       └── google_drive_client.py # Google Drive API v3 wrapper
@@ -579,7 +628,7 @@ graph TD
 ./scripts/test.sh --cov=src --cov-report=term-missing
 ```
 
-621 tests covering: routing, approval, CrewAI runner, hire flow, SOP store, SOP model, SOP registry, SOP creation flow, inter-intern delegation, intern model, tool registry, all 15 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
+618 tests covering: routing, approval, CrewAI runner, hire flow, SOP store, SOP model, SOP registry, SOP creation flow, inter-intern delegation, intern model, tool registry, all 15 tools, Jira/Confluence clients, Google Calendar/Gmail clients, credential store, Google OAuth, audit logging, setup wizard, connection commands, scheduled jobs, orchestrator (help, edit, history, Block Kit), Notion second brain, circuit breakers, retry/backoff, startup validation, memory eviction, sandbox hardening, rate limiting, metrics, scheduler, doctor CLI.
 
 ---
 

@@ -26,9 +26,12 @@ class JiraQueryInput(BaseModel):
     query: str = Field(
         ...,
         description=(
-            "Jira search query — use an issue key (e.g. PROJ-123) to get "
-            "details, or describe what you're looking for (e.g. 'open bugs "
-            "in PROJECT')"
+            "An issue key (e.g. PROJ-123) to get details, or a JQL query. "
+            "Examples: "
+            "'project = PROJ AND status = Open', "
+            "'assignee = currentUser() AND resolution = Unresolved', "
+            "'project = PROJ AND type = Bug ORDER BY priority DESC', "
+            "'status changed to Done after -7d'"
         ),
     )
 
@@ -37,9 +40,10 @@ class JiraReadTool(BaseTool):
     name: str = "Search Jira"
     description: str = (
         "Search Jira for issues, epics, and project data. "
-        "Provide an issue key like PROJ-123 to get details, or a natural "
-        "language query to search. This is read-only — to create or update "
-        "issues, propose an action plan instead."
+        "Provide an issue key like PROJ-123 to get details, or a valid JQL "
+        "query to search. IMPORTANT: queries must be valid JQL syntax, not "
+        "natural language. This is read-only — to create or update issues, "
+        "propose an action plan instead."
     )
     args_schema: Type[BaseModel] = JiraQueryInput
     jira_client: object = None  # Set after init to avoid pydantic issues

@@ -68,7 +68,9 @@ class JiraClient:
         """Search issues using JQL and return list of issue objects."""
         logger.debug("search_issues -> jql=%s max=%d", jql, max_results)
         try:
-            response = self._client.jql(jql, limit=max_results, fields=fields)
+            # Use the new /rest/api/3/search/jql endpoint (old /search was removed)
+            params = {"jql": jql, "maxResults": max_results, "fields": fields}
+            response = self._client.get("rest/api/3/search/jql", params=params)
             issues = response.get("issues", [])
             logger.debug("search_issues <- %d issues", len(issues))
             return issues

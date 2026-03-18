@@ -511,8 +511,14 @@ class CrewRunner:
         Uses threading.Timer instead of SIGALRM so it works in worker threads
         (Slack Bolt dispatches message handlers off the main thread).
         """
+        from .context import current_user_id
+        import contextvars
+
         result_box: list = []
         exc_box: list = []
+        # Capture current context so ContextVars (e.g. current_user_id)
+        # propagate into the worker thread.
+        ctx = contextvars.copy_context()
 
         def _target():
             try:
@@ -520,7 +526,7 @@ class CrewRunner:
             except Exception as e:  # noqa: BLE001
                 exc_box.append(e)
 
-        t = threading.Thread(target=_target, daemon=True)
+        t = threading.Thread(target=ctx.run, args=(_target,), daemon=True)
         t.start()
         t.join(timeout=self._crew_timeout)
 

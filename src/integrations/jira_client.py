@@ -123,7 +123,11 @@ class JiraClient:
         }
         if description:
             fields["description"] = description
-        fields.update(kwargs)
+        # Merge extra fields but never overwrite core ones
+        _core = {"project", "summary", "issuetype"}
+        for k, v in kwargs.items():
+            if k.lower().replace("_", "") not in {c.lower() for c in _core}:
+                fields[k] = v
         logger.debug("create_issue -> project=%s summary=%s type=%s", project_key, summary, issue_type)
         try:
             issue = self._client.issue_create(fields=fields)
@@ -235,7 +239,10 @@ class JiraClient:
             return {"ok": False, "error": "Missing summary in params"}
         issue_type = params.get("issue_type", params.get("type", "Task"))
         description = params.get("description", "")
-        extra = {k: v for k, v in params.items() if k not in ("project_key", "project", "summary", "issue_type", "type", "description")}
+        # Strip known param aliases so they don't leak as raw Jira fields
+        _known = {"project_key", "project", "summary", "issue_type", "type", "description",
+                   "issuetype", "issueType", "issuetype_name", "issue_type_name"}
+        extra = {k: v for k, v in params.items() if k not in _known}
         issue = self.create_issue(project_key, summary, issue_type, description, **extra)
         key = issue.get("key", "")
         url = f"{self._server}/browse/{key}" if key else ""

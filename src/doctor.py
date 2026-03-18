@@ -120,9 +120,8 @@ def check_env_vars() -> bool:
 
     # Optional keys
     optional = {
-        "NOTION_TOKEN": "Notion integration token (ntn_...)",
-        "NOTION_OAUTH_CLIENT_ID": "Notion OAuth client ID (for per-user Notion)",
-        "NOTION_OAUTH_CLIENT_SECRET": "Notion OAuth client secret (for per-user Notion)",
+        "NOTION_OAUTH_CLIENT_ID": "Notion OAuth client ID (per-user Notion)",
+        "NOTION_OAUTH_CLIENT_SECRET": "Notion OAuth client secret (per-user Notion)",
         "GOOGLE_API_KEY": "Google API key (for image generation)",
         "ZENROWS_API_KEY": "ZenRows API key (for web reader tool)",
     }
@@ -183,68 +182,20 @@ def check_slack() -> bool:
 
 
 def check_notion() -> bool:
-    """Test Notion API connectivity and database access."""
-    _section("Notion Integration")
+    """Check Notion OAuth configuration."""
+    _section("Notion Integration (Per-User OAuth)")
 
-    token = os.environ.get("NOTION_TOKEN")
-    if not token:
-        _warn("NOTION_TOKEN not set — Notion integration disabled")
-        return True  # not a failure if intentionally disabled
+    client_id = os.environ.get("NOTION_OAUTH_CLIENT_ID", "")
+    client_secret = os.environ.get("NOTION_OAUTH_CLIENT_SECRET", "")
 
-    try:
-        from notion_client import Client as NotionSDKClient
-        client = NotionSDKClient(auth=token)
-
-        # Test authentication
-        me = client.users.me()
-        bot_name = me.get("name", "unknown")
-        _pass(f"Notion authenticated as '{bot_name}'")
-
-    except ImportError:
-        return _fail("notion-client not installed — run: pip install notion-client")
-    except Exception as e:
-        error_str = str(e)
-        if "unauthorized" in error_str.lower() or "401" in error_str:
-            return _fail("Notion token is invalid or expired")
-        return _fail(f"Notion connection failed: {e}")
-
-    # Check parent page configuration
-    parent_page_id = os.environ.get("NOTION_PARENT_PAGE_ID", "")
-    if parent_page_id:
-        _pass(f"NOTION_PARENT_PAGE_ID is set ({parent_page_id[:8]}...)")
-        try:
-            page = client.pages.retrieve(page_id=parent_page_id)
-            title_parts = page.get("properties", {}).get("title", {}).get("title", [])
-            page_title = "".join(t.get("plain_text", "") for t in title_parts) if title_parts else "(untitled)"
-            _pass(f"Parent page accessible: '{page_title}'")
-        except Exception as e:
-            _warn(f"Could not access parent page: {e}")
+    if client_id and client_secret:
+        _pass("NOTION_OAUTH_CLIENT_ID is set")
+        _pass("NOTION_OAUTH_CLIENT_SECRET is set")
+        _pass("Per-user Notion OAuth is configured — users can say `connect notion`")
+    elif client_id or client_secret:
+        _warn("Only one of NOTION_OAUTH_CLIENT_ID / NOTION_OAUTH_CLIENT_SECRET is set — both are needed")
     else:
-        _warn("NOTION_PARENT_PAGE_ID not set — databases must be pre-configured in notion_databases.yaml")
-
-    # Check for Interns database
-    try:
-        from .integrations.notion_second_brain import build_second_brain
-
-        config_path = _CONFIG_DIR / "settings.yaml"
-        config = {}
-        if config_path.exists():
-            with open(config_path) as f:
-                config = yaml.safe_load(f) or {}
-
-        brain = build_second_brain(config)
-        if brain:
-            db_count = len(brain._registry.all_databases())
-            _pass(f"{db_count} database(s) registered (yaml + discovered + cached)")
-            db_id = brain._get_db_id("Interns")
-            if db_id:
-                _pass("Interns database found in Notion")
-            else:
-                _warn("Interns database not found — will be auto-created on first hire if parent page is set")
-        else:
-            _warn("Could not initialize Notion integration")
-    except Exception as e:
-        _warn(f"Could not verify databases: {e}")
+        _warn("Notion OAuth not configured — set NOTION_OAUTH_CLIENT_ID and NOTION_OAUTH_CLIENT_SECRET for per-user Notion")
 
     return True
 

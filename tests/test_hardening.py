@@ -91,16 +91,6 @@ class TestStartupValidation:
                 _validate_startup(config)
             assert "morning_briefing" in caplog.text
 
-    def test_notion_build_failure_continues(self, tmp_path):
-        """Orchestrator should start even if Notion initialization fails."""
-        config = {**_make_config(tmp_path), "integrations": {"notion": {"enabled": True}}}
-        with patch.dict(os.environ, _REQUIRED_ENV), \
-             patch("src.orchestrator.CrewRunner") as MockRunner, \
-             patch("src.orchestrator.build_second_brain", side_effect=Exception("Notion down")):
-            MockRunner.return_value = MagicMock()
-            orch = Orchestrator(MagicMock(), config)
-            assert orch.notion is None
-
 
 # ---------------------------------------------------------------------------
 # Memory eviction
@@ -110,8 +100,7 @@ class TestMemoryEviction:
     @pytest.fixture
     def orch(self, tmp_path):
         with patch.dict(os.environ, _REQUIRED_ENV), \
-             patch("src.orchestrator.CrewRunner") as MockRunner, \
-             patch("src.orchestrator.build_second_brain", return_value=None):
+             patch("src.orchestrator.CrewRunner") as MockRunner:
             MockRunner.return_value = MagicMock()
             o = Orchestrator(MagicMock(), _make_config(tmp_path))
             o._max_threads = 5
@@ -141,8 +130,7 @@ class TestEditSessionTTL:
     @pytest.fixture
     def orch(self, tmp_path):
         with patch.dict(os.environ, _REQUIRED_ENV), \
-             patch("src.orchestrator.CrewRunner") as MockRunner, \
-             patch("src.orchestrator.build_second_brain", return_value=None):
+             patch("src.orchestrator.CrewRunner") as MockRunner:
             MockRunner.return_value = MagicMock()
             o = Orchestrator(MagicMock(), _make_config(tmp_path))
             o._edit_session_ttl = 0.1  # 100ms for testing
@@ -331,26 +319,29 @@ class TestNotionRetry:
 
 class TestPlanExecutionCircuitBreaker:
     @pytest.fixture
-    def orch(self, tmp_path):
+    def orch_and_brain(self, tmp_path):
         config = {**_make_config(tmp_path), "integrations": {"notion": {"enabled": True}}}
+        mock_brain = MagicMock()
         with patch.dict(os.environ, _REQUIRED_ENV), \
-             patch("src.orchestrator.CrewRunner") as MockRunner, \
-             patch("src.orchestrator.build_second_brain", return_value=MagicMock()):
+             patch("src.orchestrator.CrewRunner") as MockRunner:
             MockRunner.return_value = MagicMock()
             o = Orchestrator(MagicMock(), config)
-            return o
+            o._get_notion_brain_for_step = MagicMock(return_value=mock_brain)
+            return o, mock_brain
 
-    def test_notion_step_uses_circuit_breaker(self, orch):
-        orch.notion.execute_step.return_value = {"ok": True}
+    def test_notion_step_uses_circuit_breaker(self, orch_and_brain):
+        orch, mock_brain = orch_and_brain
+        mock_brain.execute_step.return_value = {"ok": True}
         plan = {
             "summary": "Create task",
             "steps": [{"service": "notion", "action": "create_task", "params": {}, "description": "Create task"}],
         }
         orch._execute_plan(plan, "C123", "ts-1")
-        orch.notion.execute_step.assert_called_once()
+        mock_brain.execute_step.assert_called_once()
 
-    def test_notion_failure_records_circuit_failure(self, orch):
-        orch.notion.execute_step.side_effect = Exception("Notion down")
+    def test_notion_failure_records_circuit_failure(self, orch_and_brain):
+        orch, mock_brain = orch_and_brain
+        mock_brain.execute_step.side_effect = Exception("Notion down")
         plan = {
             "summary": "Create task",
             "steps": [{"service": "notion", "action": "create_task", "params": {}, "description": "Create task"}],
@@ -358,7 +349,8 @@ class TestPlanExecutionCircuitBreaker:
         orch._execute_plan(plan, "C123", "ts-1")
         assert orch._notion_circuit._failure_count == 1
 
-    def test_circuit_open_skips_notion_step(self, orch):
+    def test_circuit_open_skips_notion_step(self, orch_and_brain):
+        orch, mock_brain = orch_and_brain
         from src.circuit_breaker import CircuitState
         # Force circuit open
         orch._notion_circuit._state = CircuitState.OPEN
@@ -369,7 +361,7 @@ class TestPlanExecutionCircuitBreaker:
             "steps": [{"service": "notion", "action": "create_task", "params": {}, "description": "Create task"}],
         }
         orch._execute_plan(plan, "C123", "ts-1")
-        orch.notion.execute_step.assert_not_called()
+        mock_brain.execute_step.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

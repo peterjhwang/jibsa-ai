@@ -587,64 +587,8 @@ def _discover_child_databases(client: NotionClient, parent_page_id: str) -> list
 
 
 # ---------------------------------------------------------------------------
-# Factory
+# Factory — per-user
 # ---------------------------------------------------------------------------
-
-def build_second_brain(config: dict) -> "NotionSecondBrain | None":
-    if not config.get("integrations", {}).get("notion", {}).get("enabled", False):
-        return None
-    token = os.environ.get("NOTION_TOKEN", "")
-    if not token:
-        logger.warning("Notion integration enabled but NOTION_TOKEN is not set")
-        return None
-
-    client = NotionClient(token)
-
-    # Build registry
-    registry = DatabaseRegistry()
-
-    # 1. Load from YAML override (highest priority)
-    db_config_path = _CONFIG_DIR / "notion_databases.yaml"
-    try:
-        with open(db_config_path) as f:
-            raw = yaml.safe_load(f).get("notion", {})
-        for entry in raw.get("databases", []):
-            db_id = _extract_db_id(entry.get("id", ""))
-            if not db_id:
-                logger.warning("Notion DB %r has no valid ID — skipped", entry.get("name"))
-                continue
-            registry.register(entry["name"], db_id, entry.get("keywords", []))
-            logger.info("Notion DB %-25s → %s (yaml)", entry["name"], db_id)
-    except FileNotFoundError:
-        logger.info("notion_databases.yaml not found — using dynamic mode")
-
-    # 2. Resolve parent_page_id
-    parent_page_id = os.environ.get("NOTION_PARENT_PAGE_ID", "")
-    if not parent_page_id:
-        notion_cfg = config.get("integrations", {}).get("notion", {})
-        parent_page_id = notion_cfg.get("parent_page_id", "")
-
-    # 3. Discover child databases under parent page
-    if parent_page_id:
-        discovered = _discover_child_databases(client, parent_page_id)
-        for db in discovered:
-            if not registry.get_db_id(db["name"]):
-                # Try to find keywords from templates
-                template = DB_TEMPLATES.get(db["name"], {})
-                keywords = template.get("keywords", [])
-                registry.register(db["name"], db["id"], keywords)
-                logger.info("Notion DB %-25s → %s (discovered)", db["name"], db["id"])
-
-    # 4. Load cache (fills in any gaps not covered by YAML or discovery)
-    registry.load_cache(_CACHE_PATH)
-
-    # 5. Save updated cache
-    registry.save_cache(_CACHE_PATH)
-
-    db_count = len(registry.all_databases())
-    logger.info("Notion connected (%d DBs: yaml+discovered+cached)", db_count)
-    return NotionSecondBrain(client=client, db_registry=registry, parent_page_id=parent_page_id)
-
 
 def _discover_databases_via_search(client: NotionClient) -> list[dict]:
     """Discover databases accessible to a user's integration via Notion search API."""
@@ -695,12 +639,15 @@ def build_user_second_brain(
             logger.info("User %s Notion DB %-25s → %s (discovered)", user_id, db["name"], db["id"])
         user_registry.save_registry(user_id, registry)
 
+    # Load per-user parent page ID (set during post-connect setup)
+    parent_page_id = user_registry.get_parent_page_id(user_id)
+
     db_count = len(registry.all_databases())
-    logger.info("Per-user Notion for %s (%d DBs)", user_id, db_count)
+    logger.info("Per-user Notion for %s (%d DBs, parent=%s)", user_id, db_count, parent_page_id[:8] if parent_page_id else "none")
     return NotionSecondBrain(
         client=client,
         db_registry=registry,
-        parent_page_id="",  # per-user mode doesn't use a global parent page
+        parent_page_id=parent_page_id,
         user_registry=user_registry,
         user_id=user_id,
     )

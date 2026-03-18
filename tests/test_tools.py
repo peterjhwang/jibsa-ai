@@ -16,31 +16,56 @@ from src.tools.calendar_tool import CalendarReadTool
 # ---------------------------------------------------------------------------
 
 class TestNotionReadTool:
-    def test_returns_context_on_success(self):
+    def _make_tool(self, mock_brain=None, token="ntn_test"):
+        mock_oauth = MagicMock()
+        mock_oauth.get_token.return_value = token
+        mock_registry = MagicMock()
+        tool = NotionReadTool.create(
+            notion_oauth=mock_oauth,
+            notion_user_registry=mock_registry,
+            config={},
+        )
+        return tool, mock_brain
+
+    @patch("src.tools.notion_read_tool.build_user_second_brain")
+    @patch("src.tools.notion_read_tool.current_user_id")
+    def test_returns_context_on_success(self, mock_uid, mock_build):
+        mock_uid.get.return_value = "U123"
         mock_brain = MagicMock()
         mock_brain.get_context_for_request.return_value = "**Tasks**\n- Fix bug\n- Write docs"
-        tool = NotionReadTool.create(mock_brain)
+        mock_build.return_value = mock_brain
+        tool, _ = self._make_tool()
         result = tool._run("my tasks")
         assert "Fix bug" in result
 
-    def test_returns_no_data_message(self):
+    @patch("src.tools.notion_read_tool.build_user_second_brain")
+    @patch("src.tools.notion_read_tool.current_user_id")
+    def test_returns_no_data_message(self, mock_uid, mock_build):
+        mock_uid.get.return_value = "U123"
         mock_brain = MagicMock()
         mock_brain.get_context_for_request.return_value = ""
-        tool = NotionReadTool.create(mock_brain)
+        mock_build.return_value = mock_brain
+        tool, _ = self._make_tool()
         result = tool._run("something obscure")
         assert "No matching" in result
 
-    def test_returns_error_on_exception(self):
+    @patch("src.tools.notion_read_tool.build_user_second_brain")
+    @patch("src.tools.notion_read_tool.current_user_id")
+    def test_returns_error_on_exception(self, mock_uid, mock_build):
+        mock_uid.get.return_value = "U123"
         mock_brain = MagicMock()
         mock_brain.get_context_for_request.side_effect = Exception("API error")
-        tool = NotionReadTool.create(mock_brain)
+        mock_build.return_value = mock_brain
+        tool, _ = self._make_tool()
         result = tool._run("tasks")
         assert "failed" in result.lower()
 
-    def test_returns_not_connected_when_no_brain(self):
-        tool = NotionReadTool()
+    @patch("src.tools.notion_read_tool.current_user_id")
+    def test_returns_not_connected_when_no_token(self, mock_uid):
+        mock_uid.get.return_value = "U123"
+        tool, _ = self._make_tool(token=None)
         result = tool._run("tasks")
-        assert "not connected" in result.lower()
+        assert "connect notion" in result.lower()
 
 
 # ---------------------------------------------------------------------------

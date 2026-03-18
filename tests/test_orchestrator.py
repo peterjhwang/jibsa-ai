@@ -52,8 +52,7 @@ def mock_slack():
 def orchestrator(mock_slack, tmp_path):
     config = _make_config(tmp_path)
     with patch.dict(os.environ, _REQUIRED_ENV), \
-         patch("src.orchestrator.CrewRunner") as MockRunner, \
-         patch("src.orchestrator.build_second_brain", return_value=None):
+         patch("src.orchestrator.CrewRunner") as MockRunner:
         mock_runner = MagicMock()
         MockRunner.return_value = mock_runner
         orch = Orchestrator(mock_slack, config)

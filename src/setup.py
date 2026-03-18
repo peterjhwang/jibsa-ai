@@ -204,35 +204,22 @@ def step_optional_integrations() -> None:
 
     env = _read_env()
 
-    # Notion
-    if _yes_no("Enable Notion Second Brain?"):
-        print("    [1] Global token (single workspace for all users)")
-        print("    [2] Per-user OAuth (each user connects their own workspace)")
-        notion_choice = _prompt("Choice", "1")
-
-        if notion_choice == "2":
-            for key, hint in [
-                ("NOTION_OAUTH_CLIENT_ID", "your-notion-client-id"),
-                ("NOTION_OAUTH_CLIENT_SECRET", "your-notion-client-secret"),
-            ]:
-                current = env.get(key, "")
-                if current and not _is_placeholder(current):
-                    _ok(f"{key} is set")
-                else:
-                    value = _prompt(f"Enter {key}")
-                    if value:
-                        _update_env(key, value)
-                        _ok(f"{key} saved")
-            print("    Users will say `connect notion` in Slack to link their workspace.")
-        else:
-            token = env.get("NOTION_TOKEN", "")
-            if token and not _is_placeholder(token):
-                _ok(f"NOTION_TOKEN is set ({token[:12]}...)")
+    # Notion (per-user OAuth)
+    if _yes_no("Enable Notion (per-user OAuth)?"):
+        print("    Each user connects their own Notion workspace via `connect notion` in Slack.")
+        print("    You need a Public integration from notion.so/my-integrations.")
+        for key, hint in [
+            ("NOTION_OAUTH_CLIENT_ID", "your-notion-client-id"),
+            ("NOTION_OAUTH_CLIENT_SECRET", "your-notion-client-secret"),
+        ]:
+            current = env.get(key, "")
+            if current and not _is_placeholder(current):
+                _ok(f"{key} is set")
             else:
-                value = _prompt("Enter NOTION_TOKEN (ntn_...)")
+                value = _prompt(f"Enter {key}")
                 if value:
-                    _update_env("NOTION_TOKEN", value)
-                    _ok("NOTION_TOKEN saved")
+                    _update_env(key, value)
+                    _ok(f"{key} saved")
     else:
         _skip("Notion skipped")
 

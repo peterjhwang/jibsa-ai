@@ -28,7 +28,7 @@ from .intern_registry import InternRegistry
 from .integrations.audit_store import AuditStore
 from .intern_templates import list_templates, get_template, template_to_jd
 from .integrations.intern_store import InternStore
-from .integrations.notion_second_brain import build_second_brain
+from .integrations.notion_second_brain import build_user_second_brain
 from .models.intern import InternJD
 from .router import MessageRouter, RouteResult
 from .tool_registry import ToolRegistry
@@ -177,18 +177,6 @@ class Orchestrator:
         self.slack = slack_client
         self.config = config
 
-        # Notion Second Brain (optional — for read/write to user's Notion databases)
-        notion_enabled = config.get("integrations", {}).get("notion", {}).get("enabled", False)
-        if notion_enabled:
-            try:
-                self.notion = build_second_brain(config)
-            except Exception:
-                logger.warning("Failed to initialize Notion Second Brain — continuing without it", exc_info=True)
-                self.notion = None
-        else:
-            self.notion = None
-            logger.info("Notion integration is disabled")
-
         self.approval = ApprovalManager(config)
 
         # Jira client
@@ -246,7 +234,8 @@ class Orchestrator:
                 crew_runner=self.runner,
                 tool_registry=self.tool_registry,
                 config=self.config,
-                notion=self.notion,
+                notion_oauth=self.notion_oauth,
+                notion_user_registry=self.notion_user_registry,
             ),
         )
 
@@ -280,6 +269,9 @@ class Orchestrator:
         # Pending OAuth flows: user_id → (service, channel, thread_ts)
         self._pending_oauth: dict[str, tuple[str, str, str]] = {}
 
+        # Pending Notion post-connect setup: user_id → dm_channel
+        self._pending_notion_setup: dict[str, str] = {}
+
         # Register scheduled jobs
         self._register_activity_summary()
         self._register_morning_briefing()
@@ -287,10 +279,9 @@ class Orchestrator:
 
     def _register_crewai_tools(self) -> None:
         """Create and register CrewAI tool instances."""
-        # Notion read tool (per-user OAuth + global fallback)
+        # Notion read tool (per-user OAuth)
         self.tool_registry.register_crewai_tool(
             "notion", NotionReadTool.create(
-                notion_brain=self.notion,
                 notion_oauth=self.notion_oauth,
                 notion_user_registry=self.notion_user_registry,
                 config=self.config,
@@ -512,14 +503,20 @@ class Orchestrator:
             if cal_lines:
                 sections.append("*Today's Calendar*\n" + "\n".join(cal_lines))
 
-        # Notion: overdue tasks
-        if self.notion:
-            try:
-                context = self.notion.get_context_for_request("overdue tasks")
-                if context:
-                    sections.append(f"*Overdue Tasks*\n{context[:1000]}")
-            except Exception as e:
-                logger.warning("Morning briefing: Notion query failed: %s", e)
+        # Notion: overdue tasks (per-user — aggregate from all connected users)
+        notion_users = self.credential_store.list_users_for_service("notion")
+        if notion_users:
+            for uid in notion_users:
+                try:
+                    brain = build_user_second_brain(uid, self.notion_oauth, self.notion_user_registry, self.config)
+                    if brain:
+                        context = brain.get_context_for_request("overdue tasks")
+                        if context:
+                            name = uid  # could resolve to display name if needed
+                            sections.append(f"*Overdue Tasks*\n{context[:1000]}")
+                            break  # one Notion section is enough for the briefing
+                except Exception as e:
+                    logger.warning("Morning briefing: Notion query failed for %s: %s", uid, e)
 
         # Jira: assigned open issues
         if self.jira:
@@ -649,6 +646,11 @@ class Orchestrator:
         # Priority 0.3: Pending OAuth code (user pasting auth code in DM)
         if user in self._pending_oauth and channel.startswith("D"):
             self._handle_oauth_code(channel, thread_ts, user, text)
+            return
+
+        # Priority 0.4: Pending Notion post-connect setup (user pasting parent page URL in DM)
+        if user in self._pending_notion_setup and channel.startswith("D"):
+            self._handle_notion_setup_response(channel, thread_ts, user, text)
             return
 
         # Priority 0.5: Active edit session
@@ -1467,12 +1469,16 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _get_notion_context(self, text: str) -> str:
-        """Fetch Notion context with circuit breaker protection."""
-        if not self.notion:
+        """Fetch Notion context with circuit breaker protection (per-user)."""
+        user_id = current_user_id.get()
+        if not user_id:
+            return ""
+        brain = self._get_notion_brain_for_step()
+        if not brain:
             return ""
         try:
             self._notion_circuit.check()
-            context = self.notion.get_context_for_request(text)
+            context = brain.get_context_for_request(text)
             self._notion_circuit.record_success()
             return context
         except CircuitOpenError:
@@ -1845,7 +1851,7 @@ class Orchestrator:
             elif service == "notion":
                 notion_brain = self._get_notion_brain_for_step()
                 if not notion_brain:
-                    result = {"ok": False, "error": "Notion is not connected. Say `connect notion` or set NOTION_TOKEN."}
+                    result = {"ok": False, "error": "Notion is not connected. Say `connect notion` first."}
                 else:
                     try:
                         self._notion_circuit.check()
@@ -2037,22 +2043,21 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _get_notion_brain_for_step(self):
-        """Resolve the Notion brain for write step execution: per-user first, then global."""
+        """Resolve the per-user Notion brain for step execution."""
         user_id = current_user_id.get()
-        if user_id and self.notion_oauth.get_token(user_id):
-            try:
-                from .integrations.notion_second_brain import build_user_second_brain
-                brain = build_user_second_brain(
-                    user_id=user_id,
-                    notion_oauth=self.notion_oauth,
-                    user_registry=self.notion_user_registry,
-                    config=self.config,
-                )
-                if brain:
-                    return brain
-            except Exception as e:
-                logger.warning("Failed to build per-user Notion brain for %s: %s", user_id, e)
-        return self.notion
+        if not user_id:
+            return None
+        try:
+            brain = build_user_second_brain(
+                user_id=user_id,
+                notion_oauth=self.notion_oauth,
+                user_registry=self.notion_user_registry,
+                config=self.config,
+            )
+            return brain
+        except Exception as e:
+            logger.warning("Failed to build per-user Notion brain for %s: %s", user_id, e)
+            return None
 
     def _execute_google_step(self, step: dict, service: str) -> dict:
         """Execute a Google Calendar or Gmail step using per-user credentials."""
@@ -2361,24 +2366,129 @@ class Orchestrator:
         elif service == "notion":
             result = self.notion_oauth.exchange_code(user, code)
             if result["ok"]:
-                # Run database discovery for the user
                 workspace = result.get("workspace_name", "your workspace")
+                # Discover databases
+                db_names = []
                 try:
-                    from .integrations.notion_second_brain import build_user_second_brain
                     brain = build_user_second_brain(
                         user_id=user,
                         notion_oauth=self.notion_oauth,
                         user_registry=self.notion_user_registry,
                         config=self.config,
                     )
-                    db_count = len(brain._registry.all_databases()) if brain else 0
-                    self._post(channel, thread_ts, f"Connected to Notion workspace *{workspace}*! Found {db_count} database(s). Your Notion data is now available to your interns.")
+                    if brain:
+                        db_names = [db["name"] for db in brain._registry.all_databases()]
                 except Exception as e:
                     logger.warning("Notion discovery failed for user=%s: %s", user, e)
-                    self._post(channel, thread_ts, f"Connected to Notion workspace *{workspace}*! Database discovery had an issue, but your connection is saved.")
+
                 self.audit.log(action="service_connected", user_id=user, service="notion")
+
+                # Post-connect setup: show what we found and ask for parent page
+                db_list = "\n".join(f"  - {name}" for name in db_names) if db_names else "  _(none found)_"
+                self._post(
+                    channel, thread_ts,
+                    f"Connected to Notion workspace *{workspace}*!\n\n"
+                    f"*Databases discovered:*\n{db_list}\n\n"
+                    f"*Optional: set a parent page*\n"
+                    f"A parent page lets me auto-create new databases (e.g. Tasks, Projects) when needed.\n"
+                    f"Paste a Notion page URL here, or say *skip* to finish setup."
+                )
+                self._pending_notion_setup[user] = channel
             else:
                 self._post(channel, thread_ts, f"Authorization failed: {result['error']}\n\nSay `connect notion` to try again.")
+
+    def _handle_notion_setup_response(self, channel: str, thread_ts: str, user: str, text: str) -> None:
+        """Handle user response during Notion post-connect setup (parent page URL or skip)."""
+        self._pending_notion_setup.pop(user, None)
+
+        clean = text.strip().lower()
+        if clean in ("skip", "no", "none", "done"):
+            self._post(channel, thread_ts, "Notion setup complete! Your databases are ready to use.")
+            return
+
+        # Try to extract a Notion page ID from the pasted URL or ID
+        import re as _re
+        from urllib.parse import urlparse
+
+        raw = text.strip().strip("<>")  # strip Slack URL formatting
+        # Match UUID pattern (with or without dashes)
+        match = _re.search(r"([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})", raw, _re.IGNORECASE)
+
+        if not match:
+            # Try to extract from Notion URL slug (last 32 hex chars before query)
+            slug_match = _re.search(r"([0-9a-f]{32})(?:\?|$)", raw, _re.IGNORECASE)
+            if slug_match:
+                hex_id = slug_match.group(1)
+                page_id = f"{hex_id[:8]}-{hex_id[8:12]}-{hex_id[12:16]}-{hex_id[16:20]}-{hex_id[20:]}"
+            else:
+                self._post(channel, thread_ts, "Couldn't find a page ID in that. Paste a Notion page URL (e.g. `https://notion.so/My-Page-abc123...`), or say *skip*.")
+                self._pending_notion_setup[user] = channel  # keep waiting
+                return
+        else:
+            page_id = match.group(1)
+
+        # Verify access to the page
+        try:
+            token = self.notion_oauth.get_token(user)
+            if not token:
+                self._post(channel, thread_ts, "Notion setup complete! (Could not verify page — token not found)")
+                return
+
+            from .integrations.notion_client import NotionClient, NotionAPIError
+            client = NotionClient(token)
+            page = client.get_page(page_id)
+            # Extract title
+            title_parts = page.get("properties", {}).get("title", {}).get("title", [])
+            page_title = "".join(t.get("plain_text", "") for t in title_parts) if title_parts else "(untitled)"
+
+            # Store the parent page ID
+            self.notion_user_registry.set_parent_page_id(user, page_id)
+
+            # Discover child databases under this page
+            from .integrations.notion_second_brain import _discover_child_databases
+            from .integrations.notion_db_registry import DatabaseRegistry
+            from .integrations.notion_db_templates import DB_TEMPLATES
+
+            discovered = _discover_child_databases(client, page_id)
+            if discovered:
+                registry = self.notion_user_registry.get_registry(user) or DatabaseRegistry()
+                new_dbs = []
+                for db in discovered:
+                    if not registry.get_db_id(db["name"]):
+                        template = DB_TEMPLATES.get(db["name"], {})
+                        keywords = template.get("keywords", [])
+                        registry.register(db["name"], db["id"], keywords)
+                        new_dbs.append(db["name"])
+                if new_dbs:
+                    self.notion_user_registry.save_registry(user, registry)
+
+                db_list = "\n".join(f"  - {db['name']}" for db in discovered)
+                self._post(
+                    channel, thread_ts,
+                    f"Parent page set to *{page_title}* (`{page_id[:8]}...`)\n\n"
+                    f"*Child databases found:*\n{db_list}\n\n"
+                    f"Notion setup complete! New databases will be auto-created under this page when needed."
+                )
+            else:
+                self._post(
+                    channel, thread_ts,
+                    f"Parent page set to *{page_title}* (`{page_id[:8]}...`)\n\n"
+                    f"No child databases found under this page yet — they'll be auto-created when needed.\n\n"
+                    f"Notion setup complete!"
+                )
+
+        except NotionAPIError as e:
+            self._post(
+                channel, thread_ts,
+                f"Couldn't access that page — make sure you shared it with the Jibsa integration during authorization.\n"
+                f"Error: {e}\n\n"
+                f"Paste another URL, or say *skip* to finish without a parent page."
+            )
+            self._pending_notion_setup[user] = channel  # keep waiting
+        except Exception as e:
+            logger.error("Notion setup page verification failed for user=%s: %s", user, e)
+            self._post(channel, thread_ts, f"Something went wrong: {e}\n\nSay *skip* to finish setup, or paste another URL.")
+            self._pending_notion_setup[user] = channel  # keep waiting
 
     def _handle_google_token(self, channel: str, thread_ts: str, user: str, raw: str) -> None:
         """Store Google credentials from a token JSON pasted by the user."""

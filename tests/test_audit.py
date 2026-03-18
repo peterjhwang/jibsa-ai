@@ -85,8 +85,7 @@ class TestAuditCommand:
         }
         env = {"SLACK_BOT_TOKEN": "xoxb-test", "ANTHROPIC_API_KEY": "sk-ant-test"}
         with patch.dict(os.environ, env), \
-             patch("src.orchestrator.CrewRunner") as MockRunner, \
-             patch("src.orchestrator.build_second_brain", return_value=None):
+             patch("src.orchestrator.CrewRunner") as MockRunner:
             MockRunner.return_value = MagicMock()
             mock_slack = MagicMock()
             mock_slack.chat_postMessage.return_value = {"ts": "t1"}

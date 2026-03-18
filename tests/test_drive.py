@@ -119,8 +119,7 @@ class TestOrchestratorDriveDispatch:
         }
         env = {"SLACK_BOT_TOKEN": "xoxb-test", "ANTHROPIC_API_KEY": "sk-ant-test"}
         with patch.dict(os.environ, env), \
-             patch("src.orchestrator.CrewRunner") as MockRunner, \
-             patch("src.orchestrator.build_second_brain", return_value=None):
+             patch("src.orchestrator.CrewRunner") as MockRunner:
             MockRunner.return_value = MagicMock()
             o = Orchestrator(MagicMock(), config)
             return o

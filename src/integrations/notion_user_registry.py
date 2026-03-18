@@ -34,10 +34,27 @@ class NotionUserRegistry:
                 registry.register(name, db_id, entry.get("keywords", []))
         return registry
 
+    def get_parent_page_id(self, user_id: str) -> str:
+        """Return the stored parent_page_id for *user_id*, or '' if not set."""
+        data = self._store.get(user_id, _SERVICE_NAME)
+        if not data:
+            return ""
+        return data.get("parent_page_id", "")
+
+    def set_parent_page_id(self, user_id: str, parent_page_id: str) -> None:
+        """Store (or update) the parent_page_id for *user_id*."""
+        data = self._store.get(user_id, _SERVICE_NAME) or {}
+        data["parent_page_id"] = parent_page_id
+        self._store.set(user_id, _SERVICE_NAME, data)
+        logger.debug("Set parent_page_id for user=%s to %s", user_id, parent_page_id)
+
     def save_registry(self, user_id: str, registry: DatabaseRegistry) -> None:
         """Serialize and store a user's DatabaseRegistry."""
+        # Preserve existing fields (e.g. parent_page_id) when overwriting databases.
+        existing = self._store.get(user_id, _SERVICE_NAME) or {}
         databases = registry.all_databases()
-        self._store.set(user_id, _SERVICE_NAME, {"databases": databases})
+        existing["databases"] = databases
+        self._store.set(user_id, _SERVICE_NAME, existing)
         logger.debug("Saved notion registry for user=%s (%d databases)", user_id, len(databases))
 
     def delete_registry(self, user_id: str) -> None:

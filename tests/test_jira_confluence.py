@@ -370,8 +370,7 @@ class TestOrchestratorJiraDispatch:
     @pytest.fixture
     def orch(self, tmp_path):
         with patch.dict(os.environ, _REQUIRED_ENV), \
-             patch("src.orchestrator.CrewRunner") as MockRunner, \
-             patch("src.orchestrator.build_second_brain", return_value=None):
+             patch("src.orchestrator.CrewRunner") as MockRunner:
             MockRunner.return_value = MagicMock()
             from src.orchestrator import Orchestrator
             o = Orchestrator(MagicMock(), _make_config(tmp_path))

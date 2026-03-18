@@ -13,7 +13,7 @@ from src.integrations.notion_second_brain import (
     _status_prop,
     _date_prop,
     _multi_select_prop,
-    build_second_brain,
+    build_user_second_brain,
 )
 
 
@@ -335,18 +335,27 @@ def test_api_failure_returns_error_dict_not_exception():
 
 
 # ---------------------------------------------------------------------------
-# build_second_brain factory
+# build_user_second_brain factory
 # ---------------------------------------------------------------------------
 
-def test_build_returns_none_when_disabled():
-    result = build_second_brain({"integrations": {"notion": {"enabled": False}}})
+def test_build_user_returns_none_when_no_token():
+    mock_oauth = MagicMock()
+    mock_oauth.get_token.return_value = None
+    mock_registry = MagicMock()
+    result = build_user_second_brain("U123", mock_oauth, mock_registry, {})
     assert result is None
 
 
-def test_build_returns_none_when_token_missing():
-    with patch.dict("os.environ", {}, clear=True):
-        result = build_second_brain({"integrations": {"notion": {"enabled": True}}})
-    assert result is None
+def test_build_user_returns_brain_when_token_exists():
+    mock_oauth = MagicMock()
+    mock_oauth.get_token.return_value = "ntn_test_token"
+    mock_registry = MagicMock()
+    mock_registry.get_registry.return_value = DatabaseRegistry()
+    mock_registry.get_parent_page_id.return_value = ""
+    with patch("src.integrations.notion_second_brain.NotionClient"):
+        result = build_user_second_brain("U123", mock_oauth, mock_registry, {})
+    assert result is not None
+    assert isinstance(result, NotionSecondBrain)
 
 
 # ---------------------------------------------------------------------------

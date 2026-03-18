@@ -50,7 +50,8 @@ class DelegateToInternTool(BaseTool):
     _crew_runner: Any = None
     _tool_registry: Any = None
     _config: dict = {}
-    _notion: Any = None
+    _notion_oauth: Any = None
+    _notion_user_registry: Any = None
 
     def _run(self, intern_name: str, task: str) -> str:
         if not self._intern_registry or not self._crew_runner:
@@ -90,15 +91,27 @@ class DelegateToInternTool(BaseTool):
                 if not isinstance(t, DelegateToInternTool)
             ]
 
-        # Get optional Notion context
+        # Get optional Notion context (per-user)
         notion_context = ""
-        if self._notion:
-            try:
-                ctx = self._notion.get_context_for_request(task)
-                if ctx:
-                    notion_context = ctx
-            except Exception:
-                pass
+        try:
+            from ..context import current_user_id
+
+            user_id = current_user_id.get()
+            if user_id and self._notion_oauth and self._notion_user_registry:
+                from ..integrations.notion_second_brain import build_user_second_brain
+
+                brain = build_user_second_brain(
+                    user_id,
+                    self._notion_oauth,
+                    self._notion_user_registry,
+                    self._config or {},
+                )
+                if brain:
+                    ctx = brain.get_context_for_request(task)
+                    if ctx:
+                        notion_context = ctx
+        except Exception:
+            pass
 
         # Run mini crew for the target intern
         try:
@@ -138,7 +151,8 @@ class DelegateToInternTool(BaseTool):
         crew_runner: Any,
         tool_registry: ToolRegistry,
         config: dict,
-        notion: Any = None,
+        notion_oauth: Any = None,
+        notion_user_registry: Any = None,
     ) -> DelegateToInternTool:
         """Factory method to create with proper references."""
         tool = cls()
@@ -146,5 +160,6 @@ class DelegateToInternTool(BaseTool):
         tool._crew_runner = crew_runner
         tool._tool_registry = tool_registry
         tool._config = config
-        tool._notion = notion
+        tool._notion_oauth = notion_oauth
+        tool._notion_user_registry = notion_user_registry
         return tool

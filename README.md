@@ -330,19 +330,16 @@ The Metrics Reporter gathers data from Notion, Jira, and your integrations, calc
 
 ### Notion Second Brain (Optional)
 
-Notion is **not required** — Jibsa works out of the box with intern JDs and credentials stored in local SQLite. Two connection modes are available:
+Notion is **not required** — Jibsa works out of the box with intern JDs and credentials stored in local SQLite. Each user connects their own Notion workspace via `connect notion`:
 
-**Global token** — a single `NOTION_TOKEN` shares one workspace with all users. Add databases via `config/notion_databases.yaml`:
-
-```yaml
-- name: Tasks
-  id: abc123...
-  keywords: [task, todo, action]
+```
+@jibsa connect notion    → Jibsa DMs you an OAuth link
+                         → you select pages to share and authorize
+                         → Jibsa discovers your databases automatically
+                         → optional: set a parent page for auto-creating new databases
 ```
 
-**Per-user OAuth** — each user connects their own workspace via `connect notion`. Databases are auto-discovered from the pages shared during authorization. Set `NOTION_OAUTH_CLIENT_ID` and `NOTION_OAUTH_CLIENT_SECRET` in `.env`.
-
-Both modes can coexist — per-user OAuth takes priority when available, falling back to the global token.
+Set `NOTION_OAUTH_CLIENT_ID` and `NOTION_OAUTH_CLIENT_SECRET` in `.env` (from a Public integration at [notion.so/my-integrations](https://www.notion.so/my-integrations)). See [Notion Setup](docs/notion-setup.md) for details.
 
 **Available actions:** `create_task`, `update_task_status`, `create_project`, `create_note`, `create_journal_entry`, `log_expense`, `log_workout`
 
@@ -367,21 +364,16 @@ Read tools let agents search Jira (JQL) and Confluence (CQL) during reasoning. W
 
 ### Per-User Credentials (OAuth)
 
-Jira and Confluence use a single shared API token in `.env`. Google Workspace and Notion support **per-user OAuth** — each user connects their own account:
+Jira and Confluence use a single shared API token in `.env`. Google Workspace and Notion use **per-user OAuth** — each user connects their own account:
 
 ```
-@jibsa connect google    → Jibsa DMs you an OAuth link
-                         → you authorize and paste the code back
-                         → tokens stored encrypted (Fernet + SQLite)
-                         → Calendar, Gmail, and Drive all connected
-
-@jibsa connect notion    → Jibsa DMs you an OAuth link
-                         → you select pages to share and authorize
-                         → token stored encrypted, databases auto-discovered
-                         → your Notion workspace is now available
+@jibsa connect google    → Calendar, Gmail, and Drive
+@jibsa connect notion    → Notion databases (auto-discovered)
 ```
 
-Credentials are encrypted at rest with AES-128-CBC and keyed by Slack user ID — one user cannot access another's tokens. See [Google OAuth Setup](docs/google-oauth-setup.md) and [Notion Setup](docs/notion-setup.md) for details.
+After connecting, Jibsa DMs the user an authorization link. The user authorizes, pastes back a code, and credentials are stored encrypted (Fernet/AES + SQLite). One user cannot access another's tokens.
+
+Notion also runs a post-connect setup: shows discovered databases and optionally sets a parent page for auto-creating new databases. See [Google OAuth Setup](docs/google-oauth-setup.md) and [Notion Setup](docs/notion-setup.md) for details.
 
 ---
 
@@ -452,7 +444,7 @@ All behaviour is controlled via YAML files in `config/`:
 | `settings.yaml` | LLM provider, channel, timezone, approval keywords, integrations |
 | `persona.yaml` | Jibsa's name, tone, and personality |
 | `sops.yaml` | SOP seed templates (loaded on startup) |
-| `notion_databases.yaml` | Notion database IDs and keyword routing (gitignored) |
+| `notion_databases.yaml` | _(deprecated — databases are auto-discovered via per-user OAuth)_ |
 | `prompts/system.txt` | Jibsa orchestrator system prompt |
 | `prompts/intern.txt` | Intern-specific system prompt template |
 | `prompts/hire.txt` | Hiring flow system prompt |
@@ -653,8 +645,7 @@ graph TD
 - [uv](https://github.com/astral-sh/uv) (recommended) or pip
 - A [Slack app](https://api.slack.com/apps) with Socket Mode + Interactivity enabled
 - LLM API key (Anthropic, OpenAI, or Google — depending on `settings.yaml` config)
-- **Optional:** `NOTION_TOKEN` for Notion Second Brain integration (global token mode — not needed for core functionality)
-- **Optional:** `NOTION_OAUTH_CLIENT_ID`, `NOTION_OAUTH_CLIENT_SECRET` for per-user Notion OAuth (each user connects their own workspace)
+- **Optional:** `NOTION_OAUTH_CLIENT_ID`, `NOTION_OAUTH_CLIENT_SECRET` for per-user Notion (each user connects their own workspace via `connect notion`)
 - **Optional:** `JIRA_SERVER`, `JIRA_EMAIL`, `JIRA_API_TOKEN` for Jira + Confluence integration
 - **Optional:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` for per-user Google OAuth (Calendar + Gmail)
 - **Optional:** `CREDENTIAL_ENCRYPTION_KEY` for persistent encrypted credential storage

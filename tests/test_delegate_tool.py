@@ -52,7 +52,6 @@ def delegate_tool(intern_registry, mock_runner, tool_registry):
         crew_runner=mock_runner,
         tool_registry=tool_registry,
         config={},
-        notion=None,
     )
 
 
@@ -154,37 +153,49 @@ class TestDelegateErrorHandling:
 class TestDelegateWithNotion:
     def test_notion_context_passed(self, mock_runner, intern_registry, tool_registry):
         _create_intern(intern_registry, name="Sarah")
-        mock_notion = MagicMock()
-        mock_notion.get_context_for_request.return_value = "Notion: tasks list"
+        mock_oauth = MagicMock()
+        mock_user_registry = MagicMock()
+        mock_brain = MagicMock()
+        mock_brain.get_context_for_request.return_value = "Notion: tasks list"
 
         tool = DelegateToInternTool.create(
             intern_registry=intern_registry,
             crew_runner=mock_runner,
             tool_registry=tool_registry,
             config={},
-            notion=mock_notion,
+            notion_oauth=mock_oauth,
+            notion_user_registry=mock_user_registry,
         )
         mock_runner.run_for_intern.return_value = "done"
 
-        tool._run(intern_name="sarah", task="check tasks")
+        with patch("src.context.current_user_id") as mock_ctx, \
+             patch("src.integrations.notion_second_brain.build_user_second_brain", return_value=mock_brain):
+            mock_ctx.get.return_value = "U123"
+            tool._run(intern_name="sarah", task="check tasks")
 
         call_kwargs = mock_runner.run_for_intern.call_args[1]
         assert call_kwargs["notion_context"] == "Notion: tasks list"
 
     def test_notion_failure_graceful(self, mock_runner, intern_registry, tool_registry):
         _create_intern(intern_registry, name="Sarah")
-        mock_notion = MagicMock()
-        mock_notion.get_context_for_request.side_effect = Exception("Notion down")
+        mock_oauth = MagicMock()
+        mock_user_registry = MagicMock()
+        mock_brain = MagicMock()
+        mock_brain.get_context_for_request.side_effect = Exception("Notion down")
 
         tool = DelegateToInternTool.create(
             intern_registry=intern_registry,
             crew_runner=mock_runner,
             tool_registry=tool_registry,
             config={},
-            notion=mock_notion,
+            notion_oauth=mock_oauth,
+            notion_user_registry=mock_user_registry,
         )
         mock_runner.run_for_intern.return_value = "done"
 
-        # Should not raise, just skip notion context
-        result = tool._run(intern_name="sarah", task="check tasks")
+        with patch("src.context.current_user_id") as mock_ctx, \
+             patch("src.integrations.notion_second_brain.build_user_second_brain", return_value=mock_brain):
+            mock_ctx.get.return_value = "U123"
+            # Should not raise, just skip notion context
+            result = tool._run(intern_name="sarah", task="check tasks")
         assert "done" in result

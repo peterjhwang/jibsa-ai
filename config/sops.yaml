@@ -100,6 +100,30 @@ sops:
     approval_required: false
     priority: 5
 
+  # ── Jira / Daily Summary ───────────────────────────────────────────
+  - name: jira-done-summary
+    intern_id: null
+    trigger_keywords: [jira-done-summary, done summary, daily done, tickets done, moved to done]
+    description: >
+      Produce a daily summary of Jira tickets that moved to Done yesterday,
+      grouped by person and by project, plus the number of remaining open tickets.
+    steps:
+      - Search Jira with JQL: status changed to "Done" after startOfDay(-1d) ORDER BY assignee ASC
+      - Group the results by assignee (person) — show count and ticket keys with Jira URLs per person
+      - Group the results by project — show count per project with a link to the project board
+      - Search Jira with JQL: resolution = Unresolved ORDER BY project ASC, assignee ASC
+      - Count remaining open tickets total, by project, and by person
+      - Format a concise summary with sections: Completed Yesterday (by person, by project), Remaining Open (by person, by project), and Totals
+      - Include clickable Jira links for each ticket (e.g. <https://yoursite.atlassian.net/browse/PROJ-123|PROJ-123>) and for each project board
+    expected_output: >
+      A formatted daily summary showing: tickets moved to Done yesterday
+      (count per person with ticket keys and Jira URLs, count per project),
+      remaining open tickets (count per person, count per project), grand
+      totals, and clickable links to all referenced tickets and project boards.
+    tools_required: [jira]
+    approval_required: false
+    priority: 10
+
   # ── Jira / Project Management ──────────────────────────────────────
   - name: ticket-triage
     intern_id: null

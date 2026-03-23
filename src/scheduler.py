@@ -53,6 +53,8 @@ class ReminderScheduler:
         # APScheduler only stores the callable — we need the human-readable info
         self._meta_conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._meta_conn.row_factory = sqlite3.Row
+        self._meta_conn.execute("PRAGMA journal_mode=WAL")
+        self._meta_conn.execute("PRAGMA busy_timeout=5000")
         self._init_meta_table()
 
         self._started = False
